@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
 """
-完整场景 + 键盘控制(Genesis 版本):10个桌子 + 9个字母 + 3个餐具 + 1个可控机器人
+Full scene + keyboard control (Genesis version): 10 tables + 9 letters + 3 cutlery items + 1 controllable robot
 
-这是 scripts/scenes/scene_robot_keyboard.py(Isaac Lab) 的 Genesis 移植版,
-本质上是把两个已经移植好的 Genesis 例子合在一起:
-  * 场景布置(桌子/字母/餐具)来自 scene_robot_tables.py
-  * 底盘运动学 + 键盘控制来自 keyboard_control.py
+This is the Genesis port of scripts/scenes/scene_robot_keyboard.py (Isaac Lab).
+It essentially combines two already-ported Genesis examples:
+  * The scene layout (tables/letters/cutlery) comes from scene_robot_tables.py
+  * The base kinematics + keyboard control come from keyboard_control.py
 
-和静态展示场景(scene_robot_tables.py)最大的区别:
-  机器人底座这里必须是自由的(fixed=False),才能被驱动轮推着在场景里跑。
-  机器人初始放在顶部中间 (0, 4.5),用 WASD/QE 开着它在桌子之间穿行。
+The biggest difference from the static display scene (scene_robot_tables.py):
+  here the robot base must be free (fixed=False) so the drive wheels can push it
+  around the scene. The robot starts at the top center (0, 4.5); drive it between
+  the tables with WASD/QE.
 
-键位(WASD 与 Genesis viewer 快捷键冲突,故平移用方向键、旋转用 Q/E):
-  ↑/↓ 前后, ←/→ 左右平移, Q/E 原地左转/右转, 可组合(如 ↑+←),ESC 退出。
+Keys (WASD clashes with Genesis viewer shortcuts, so translation uses the arrow
+keys and rotation uses Q/E):
+  ↑/↓ forward/back, ←/→ strafe left/right, Q/E rotate in place left/right,
+  combinable (e.g. ↑+←), ESC to quit.
 
-依赖: pip install pynput  (全局键盘监听,和原脚本一致)
+Dependency: pip install pynput  (global keyboard listener, same as the original script)
 
-坐标 / 四元数约定: Genesis 与 Isaac Lab 都是 Z-up、米、四元数 w-x-y-z,位姿原样照搬。
+Coordinate / quaternion convention: both Genesis and Isaac Lab use Z-up, meters,
+quaternion w-x-y-z, so poses are carried over verbatim.
 """
 
 import math
@@ -26,7 +30,7 @@ import numpy as np
 import genesis as gs
 from pynput import keyboard
 
-########################## 底盘运动学常量 ##########################
+########################## base kinematics constants ##########################
 WHEEL_RADIUS_M = 0.05
 LINEAR_SPEED_MPS = 0.5
 ANGULAR_SPEED_RADPS = 1.2
@@ -38,7 +42,8 @@ HEADING_HOLD_KP = 2.0
 HEADING_HOLD_KD = 0.35
 MAX_HEADING_COMP_RADPS = 0.8
 
-# 每个驱动模块: (转向关节, 驱动轮关节, 机体系 x, 机体系 y)。ROS 约定: +x 前, +y 左。
+# Each drive module: (steering joint, drive-wheel joint, body-frame x, body-frame y).
+# ROS convention: +x forward, +y left.
 DRIVE_MODULES = (
     ("tmrv0_2_joint_0", "tmrv0_2_joint_1", 0.3, -0.2),
     ("tmrv0_2_joint_2", "tmrv0_2_joint_3", -0.3, 0.2),
@@ -55,48 +60,52 @@ gs.init(backend=gs.gpu)
 
 scene = gs.Scene(
     viewer_options=gs.options.ViewerOptions(
-        # 顶部斜俯视,能看到整片桌子网格和机器人
+        # Tilted top-down view that captures the whole table grid and the robot
         camera_pos=(0.0, -7.0, 14.0),
         camera_lookat=(0.0, 0.0, 0.0),
         camera_fov=40,
         max_FPS=60,
     ),
-    # 小步长提高稳定性(和 keyboard_control.py 一致)
+    # Small step size improves stability (same as keyboard_control.py)
     sim_options=gs.options.SimOptions(dt=0.005, gravity=(0.0, 0.0, -9.81)),
     show_viewer=True,
 )
 
-########################## 地面 ##########################
-# 大幅提高摩擦,给驱动轮足够抓地力(原脚本 static=2.0 / dynamic=1.5)
+########################## ground ##########################
+# Greatly increase friction to give the drive wheels enough grip
+# (original script: static=2.0 / dynamic=1.5)
 scene.add_entity(
     gs.morphs.Plane(),
     material=gs.materials.Rigid(friction=2.0),
 )
 
-########################## 桌子(11 张) ##########################
-# 桌子已从 table_edit.usd 转成 MJCF。转换时已把 90°(绕 X)的朝向烘焙进 body 的
-# quat,所以这里只传 pos。body 没有 joint => 默认焊死在世界系(等价于 fixed)。
+########################## tables (11) ##########################
+# The table was converted from table_edit.usd to MJCF. The conversion baked the
+# 90° (about X) orientation into the body quat, so we only pass pos here. The body
+# has no joint => welded to the world frame by default (equivalent to fixed).
 table_mjcf = os.path.join(SCRIPT_DIR, "mjcf", "table_edit", "table_edit.xml")
 
-# 左列 5 张 (X=-2.0) + 右列 5 张 (X=2.0) + 底部中间 1 张。
-# 顶部中间 (0, 4.5) 留给机器人。
+# Left column of 5 (X=-2.0) + right column of 5 (X=2.0) + 1 at the bottom center.
+# The top center (0, 4.5) is reserved for the robot.
 table_positions = [
     (-2.0, 3.0, 0.0), (-2.0, 1.5, 0.0), (-2.0, 0.0, 0.0), (-2.0, -1.5, 0.0), (-2.0, -3.0, 0.0),
     (2.0, 3.0, 0.0), (2.0, 1.5, 0.0), (2.0, 0.0, 0.0), (2.0, -1.5, 0.0), (2.0, -3.0, 0.0),
-    (0.0, -4.5, 0.0),  # 底部中间
+    (0.0, -4.5, 0.0),  # bottom center
 ]
 for pos in table_positions:
     scene.add_entity(
         gs.morphs.MJCF(file=table_mjcf, pos=pos),
     )
 
-########################## 字母(9 个,黑色) ##########################
-# 字母资产已从 *_edit.usd 转成 MJCF(mjcf/<L>_edit/<L>_edit.xml)。MJCF body 里已烘焙
-# 了各自的朝向,但字母还需要再绕 X 轴转 90° 才能立起来(和原 USD 场景叠加的 quat 一致),
-# 这个 morph.quat 会叠加在 body 已有朝向之上。body 无 joint => 焊死(等价 fixed)。
-# 颜色用 surface 强制成黑色。
+########################## letters (9, black) ##########################
+# The letter assets were converted from *_edit.usd to MJCF (mjcf/<L>_edit/<L>_edit.xml).
+# The MJCF body already bakes in each one's orientation, but the letters still need
+# an extra 90° rotation about X to stand upright (matching the quat composed in the
+# original USD scene); this morph.quat is composed on top of the body's existing
+# orientation. The body has no joint => welded (equivalent to fixed).
+# Color is forced to black via surface.
 LETTER_BLACK = gs.surfaces.Default(color=(0.0, 0.0, 0.0))
-LETTER_QUAT = (0.7071, 0.7071, 0.0, 0.0)  # 绕 X 轴 90°
+LETTER_QUAT = (0.7071, 0.7071, 0.0, 0.0)  # 90° about X
 letter_table_pos = {
     "A": (-2.0, 1.5, 0.7), "B": (2.0, 1.5, 0.7),
     "C": (-2.0, 0.0, 0.7), "D": (2.0, 0.0, 0.7),
@@ -111,11 +120,14 @@ for letter, (tx, ty, tz) in letter_table_pos.items():
         surface=LETTER_BLACK,
     )
 
-########################## 餐具(3 个) ##########################
-# 餐具资产已转成 MJCF(mjcf/<item>/<item>.xml),朝向同样烘焙进 body quat,只传 pos。
-# 原 Isaac Lab 里的 offset 把餐具放到了桌面外/桌面下(z 基准用的是 0.0 而非桌面 0.7),
-# 所以会掉到地上。这里把基准抬到桌面高度 0.7,并把 x/y offset 收到桌子中心附近。
-ikea_table_pos = (-2.0, 3.0, 0.7)  # 餐具桌的桌面中心
+########################## cutlery (3 items) ##########################
+# The cutlery assets were converted to MJCF (mjcf/<item>/<item>.xml); their orientation
+# is likewise baked into the body quat, so we only pass pos.
+# The original Isaac Lab offsets placed the cutlery off/below the table top (the z
+# datum was 0.0 instead of the table top at 0.7), so they fell to the floor. Here we
+# raise the datum to the table-top height 0.7 and pull the x/y offsets in toward the
+# table center.
+ikea_table_pos = (-2.0, 3.0, 0.7)  # center of the cutlery table top
 cutlery_configs = {
     "bowl": {"offset": (0.12, 0.0, 0.15), "color": (1.0, 0.0, 0.0)},
     "plate": {"offset": (-0.12, 0.0, 0.13), "color": (1.0, 1.0, 0.0)},
@@ -130,8 +142,8 @@ for item, cfg in cutlery_configs.items():
         surface=gs.surfaces.Default(color=cfg["color"]),
     )
 
-########################## 机器人(可控,顶部中间) ##########################
-# 底座必须是自由的(fixed=False)才能被轮子推着走。
+########################## robot (controllable, top center) ##########################
+# The base must be free (fixed=False) so the wheels can push it around.
 robot = scene.add_entity(
     gs.morphs.URDF(
         file=URDF_PATH,
@@ -145,22 +157,22 @@ robot = scene.add_entity(
 scene.build()
 
 
-# ---- 关节 / dof 句柄 ----
+# ---- joint / dof handles ----
 def dof(name):
     return robot.get_joint(name).dofs_idx_local[0]
 
 
-# 机械臂(双臂 7+7)与夹爪(双手 2+2)
+# Arms (dual arm 7+7) and grippers (dual hand 2+2)
 arm_joint_names = [f"{side}_fr3v2_joint{i}" for side in ("left", "right") for i in range(1, 8)]
 finger_joint_names = [f"{side}_fr3v2_finger_joint{j}" for side in ("left", "right") for j in (1, 2)]
 arm_dofs = [dof(n) for n in arm_joint_names]
 finger_dofs = [dof(n) for n in finger_joint_names]
 
-# 主动底盘关节
+# Active base joints
 steering_dofs = [dof(m[0]) for m in DRIVE_MODULES]
 drive_dofs = [dof(m[1]) for m in DRIVE_MODULES]
 
-# 被动关节(万向轮转向 + 万向轮滚动 + 后摇臂)—— 不伺服,任其自由
+# Passive joints (caster steering + caster rolling + rocker arm) -- not servoed, left free
 passive_joint_names = [
     "caster_front_left_steering_joint", "caster_front_left_joint",
     "caster_rear_right_steering_joint", "caster_rear_right_joint",
@@ -168,28 +180,28 @@ passive_joint_names = [
 ]
 passive_dofs = [dof(n) for n in passive_joint_names]
 
-# ---- 控制增益 ----
-# 机械臂:超高刚度/阻尼,把手臂牢牢锁在初始姿态
+# ---- control gains ----
+# Arms: very high stiffness/damping to lock the arms firmly in the initial pose
 robot.set_dofs_kp(np.array([5000.0] * len(arm_dofs)), arm_dofs)
 robot.set_dofs_kv(np.array([500.0] * len(arm_dofs)), arm_dofs)
 robot.set_dofs_force_range(np.array([-200.0] * len(arm_dofs)), np.array([200.0] * len(arm_dofs)), arm_dofs)
-# 夹爪:位置控制
+# Grippers: position control
 robot.set_dofs_kp(np.array([200.0] * len(finger_dofs)), finger_dofs)
 robot.set_dofs_kv(np.array([20.0] * len(finger_dofs)), finger_dofs)
 robot.set_dofs_force_range(np.array([-50.0] * len(finger_dofs)), np.array([50.0] * len(finger_dofs)), finger_dofs)
-# 转向关节:位置控制,高刚度保持转角
+# Steering joints: position control, high stiffness to hold the steer angle
 robot.set_dofs_kp(np.array([500.0] * len(steering_dofs)), steering_dofs)
 robot.set_dofs_kv(np.array([50.0] * len(steering_dofs)), steering_dofs)
 robot.set_dofs_force_range(np.array([-200.0] * len(steering_dofs)), np.array([200.0] * len(steering_dofs)), steering_dofs)
-# 驱动轮:速度控制(kp=0,靠 kv 跟踪目标轮速)
+# Drive wheels: velocity control (kp=0, track target wheel speed via kv)
 robot.set_dofs_kp(np.array([0.0] * len(drive_dofs)), drive_dofs)
 robot.set_dofs_kv(np.array([50.0] * len(drive_dofs)), drive_dofs)
 robot.set_dofs_force_range(np.array([-500.0] * len(drive_dofs)), np.array([500.0] * len(drive_dofs)), drive_dofs)
-# 被动关节:零增益,自由转动
+# Passive joints: zero gains, spin freely
 robot.set_dofs_kp(np.array([0.0] * len(passive_dofs)), passive_dofs)
 robot.set_dofs_kv(np.array([0.0] * len(passive_dofs)), passive_dofs)
 
-# ---- 初始关节姿态(双臂收起,和原脚本 initial_joint_pos 一致) ----
+# ---- initial joint pose (arms tucked in, same as the original script's initial_joint_pos) ----
 ARM_HOLD = {
     "left_fr3v2_joint1": 0.0, "left_fr3v2_joint2": -1.5, "left_fr3v2_joint3": 0.0,
     "left_fr3v2_joint4": -2.2, "left_fr3v2_joint5": 0.0, "left_fr3v2_joint6": 1.5,
@@ -208,20 +220,20 @@ for d in finger_dofs:
     q_init[d] = 0.04
 robot.set_dofs_position(q_init)
 
-# 让机器人在地面上稳定下来(底座自由,会先落稳)
+# Let the robot settle on the ground (the base is free, so it settles first)
 for _ in range(200):
     robot.control_dofs_position(arm_hold_targets, arm_dofs)
     robot.control_dofs_position(finger_open, finger_dofs)
     scene.step()
 
 
-########################## 底盘运动学(numpy 版) ##########################
+########################## base kinematics (numpy version) ##########################
 def _wrap_to_pi(a):
     return math.atan2(math.sin(a), math.cos(a))
 
 
 def _steering_alignment_scale(error):
-    """转向还没到位时,把轮速渐隐下来,避免侧滑。"""
+    """Fade the wheel speed down while the steering is not yet aligned, to avoid side-slip."""
     scale = (STEERING_ZERO_SPEED_ERROR_RAD - error) / (
         STEERING_ZERO_SPEED_ERROR_RAD - STEERING_FULL_SPEED_ERROR_RAD
     )
@@ -229,11 +241,11 @@ def _steering_alignment_scale(error):
 
 
 def get_keyboard_twist(pressed):
-    """按键 -> 机体系 (vx, vy, wz)。
+    """Keys -> body-frame (vx, vy, wz).
 
-    注意:WASD 与 Genesis viewer 的快捷键冲突,所以平移改用方向键,旋转用 Q/E
-    (q/e 不和 viewer 冲突)。
-        ↑/↓  前进/后退      ←/→  左移/右移(平移)      Q/E  原地左转/右转
+    Note: WASD clashes with Genesis viewer shortcuts, so translation uses the arrow
+    keys and rotation uses Q/E (q/e don't clash with the viewer).
+        ↑/↓  forward/back      ←/→  strafe left/right      Q/E  rotate in place left/right
     """
     vx = vy = wz = 0.0
     if "up" in pressed:
@@ -252,7 +264,7 @@ def get_keyboard_twist(pressed):
 
 
 def compute_drive_targets(cur_steer_angles, vx, vy, wz):
-    """机体 twist -> (转向角目标, 轮速目标),含 180° 翻转优化与限速。"""
+    """Body twist -> (steer-angle targets, wheel-speed targets), with 180° flip optimization and speed limiting."""
     steer_targets = np.zeros(len(DRIVE_MODULES))
     drive_targets = np.zeros(len(DRIVE_MODULES))
 
@@ -274,7 +286,7 @@ def compute_drive_targets(cur_steer_angles, vx, vy, wz):
         sp *= scale
         cur = cur_steer_angles[i]
         if sp < STOP_EPS:
-            steer_targets[i] = cur  # 停时保持当前转角,别乱回正
+            steer_targets[i] = cur  # when stopped, hold the current steer angle; don't snap back
             continue
         raw = math.atan2(wvy, wvx)
         direct = _wrap_to_pi(raw - cur)
@@ -301,7 +313,7 @@ def get_root_yaw_rate():
 
 
 def compensate_yaw_rate(vx, vy, wz, desired_yaw, manual_rotation):
-    """纯平移时锁航向,手动旋转/静止时重置保持航向。"""
+    """Lock the heading during pure translation; reset the held heading on manual rotation / standstill."""
     cur = get_root_yaw()
     if manual_rotation or math.hypot(vx, vy) < STOP_EPS:
         return wz, cur
@@ -311,7 +323,7 @@ def compensate_yaw_rate(vx, vy, wz, desired_yaw, manual_rotation):
     return wz + comp, desired_yaw
 
 
-########################## 键盘监听(pynput,全局) ##########################
+########################## keyboard listener (pynput, global) ##########################
 _pressed = set()
 _listener = None
 
@@ -337,13 +349,13 @@ _listener.daemon = True
 _listener.start()
 
 print("=" * 80)
-print("✓ 开始仿真!  (Genesis 完整场景 + 键盘控制)")
-print("  - 11 张桌子 + 9 个字母 + 3 个餐具 + 1 个可控机器人(顶部中间)")
+print("✓ Simulation started!  (Genesis full scene + keyboard control)")
+print("  - 11 tables + 9 letters + 3 cutlery items + 1 controllable robot (top center)")
 print("=" * 80)
-print("控制: ↑/↓ 前后 | ←/→ 左右平移 | Q/E 原地左转/右转 | 可组合 | ESC 退出")
+print("Controls: ↑/↓ forward/back | ←/→ strafe | Q/E rotate in place | combinable | ESC to quit")
 print("=" * 80)
 
-########################## 控制循环 ##########################
+########################## control loop ##########################
 heading_hold_yaw = get_root_yaw()
 count = 0
 try:
@@ -353,11 +365,11 @@ try:
             vx, vy, wz_cmd, heading_hold_yaw, manual_rotation=abs(wz_cmd) > 1.0e-4
         )
 
-        # 机械臂 + 夹爪:锁在初始姿态
+        # Arms + grippers: locked in the initial pose
         robot.control_dofs_position(arm_hold_targets, arm_dofs)
         robot.control_dofs_position(finger_open, finger_dofs)
 
-        # 底盘:转向用位置控制、驱动轮用速度控制
+        # Base: position control for steering, velocity control for the drive wheels
         cur_steer = robot.get_dofs_position(steering_dofs).cpu().numpy()
         steer_targets, drive_targets = compute_drive_targets(cur_steer, vx, vy, wz)
         robot.control_dofs_position(steer_targets, steering_dofs)
@@ -369,12 +381,12 @@ try:
         if count % 100 == 0 and (vx or vy or wz):
             pos = robot.get_pos().cpu().numpy()
             print(
-                f"步数 {count} | vx={vx:+.2f} vy={vy:+.2f} wz={wz:+.2f} | "
-                f"位置 [{pos[0]:.2f}, {pos[1]:.2f}] 朝向 {math.degrees(get_root_yaw()):.1f}°"
+                f"step {count} | vx={vx:+.2f} vy={vy:+.2f} wz={wz:+.2f} | "
+                f"pos [{pos[0]:.2f}, {pos[1]:.2f}] heading {math.degrees(get_root_yaw()):.1f}°"
             )
 except KeyboardInterrupt:
-    print("\n✓ 用户停止")
+    print("\n✓ Stopped by user")
 finally:
     if _listener is not None:
         _listener.stop()
-    print("✓ 完成!")
+    print("✓ Done!")

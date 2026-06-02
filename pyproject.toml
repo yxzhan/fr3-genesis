@@ -1,0 +1,56 @@
+[project]
+name = "fr3-genesis"
+version = "0.1.0"
+description = "Genesis examples for the mobile_fr3_duo dual-arm mobile robot (pick-and-place / keyboard control / scene display)"
+readme = "README.md"
+# genesis-world supports 3.10–3.12
+requires-python = ">=3.10,<3.13"
+
+dependencies = [
+    "genesis-world",
+    "pynput",
+    "numpy",
+]
+
+# Install exactly one PyTorch extra for your hardware (mutually exclusive, see
+# [tool.uv] below). genesis-world depends on torch itself; [tool.uv.sources]
+# redirects torch to the matching official PyTorch wheel index per hardware.
+[project.optional-dependencies]
+cpu = ["torch"]
+cu126 = ["torch"]
+rocm = ["torch"]
+
+[tool.uv]
+# Pick one of cpu / cu126 / rocm; installing more than one is disallowed.
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "cu126" },
+        { extra = "rocm" },
+    ],
+]
+
+# Point torch at the matching PyTorch index based on the selected extra.
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu126", extra = "cu126" },
+    { index = "pytorch-rocm", extra = "rocm", marker = "sys_platform == 'linux'" },
+]
+
+# explicit = true: these indexes are only used when explicitly referenced in
+# [tool.uv.sources], so they don't affect resolution of other packages.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm7.2"
+explicit = true
