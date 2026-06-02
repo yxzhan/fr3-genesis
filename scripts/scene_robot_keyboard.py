@@ -35,15 +35,20 @@ import warnings
 os.environ["TI_LOG_LEVEL"] = "error"
 warnings.filterwarnings("ignore")
 
-import numpy as np
-import genesis as gs
-from pynput import keyboard
-
-# Headless when there is no display (DISPLAY unset or empty). In headless mode we
-# can't open the interactive viewer or read the keyboard, so we drive a scripted
-# motion sequence and record it to a video file instead.
+# Headless when there is no display (DISPLAY unset or empty). This MUST be decided
+# before importing pynput below: pynput opens an X connection at import time and
+# crashes on a headless machine. In headless mode we can't open the viewer or read
+# the keyboard, so we drive a scripted motion sequence and record it to a video.
 # HEADLESS = not os.environ.get("DISPLAY")
 HEADLESS = True
+
+import numpy as np
+import genesis as gs
+
+# pynput requires a display; import it only in interactive mode so headless runs
+# don't fail at import time.
+if not HEADLESS:
+    from pynput import keyboard
 
 ########################## base kinematics constants ##########################
 WHEEL_RADIUS_M = 0.05
@@ -71,9 +76,32 @@ ASSETS_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "assets")
 MJCF_DIR = os.path.join(ASSETS_DIR, "mjcf")
 URDF_PATH = os.path.join(ASSETS_DIR, "urdf", "mobile_fr3_duo_v0_2_franka_hand.urdf")
 
-gs.init(backend=gs.gpu)
-# gs.init(backend=gs.amdgpu)
-# gs.init(backend=gs.cpu)
+def select_backend():
+    """Pick a Genesis backend automatically: CUDA -> AMD (ROCm) -> Apple Metal -> CPU.
+
+    Detection is done via PyTorch (a Genesis dependency):
+      * a ROCm/HIP build reports torch.version.hip set (and cuda.is_available() True)
+      * a CUDA build reports torch.version.cuda set
+      * Apple Silicon reports torch.backends.mps available
+    Falls back to CPU if torch is missing or no accelerator is found.
+    """
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return gs.amdgpu if getattr(torch.version, "hip", None) else gs.cuda
+        mps = getattr(torch.backends, "mps", None)
+        if mps is not None and mps.is_available():
+            return gs.metal
+    except Exception:
+        pass
+    return gs.cpu
+
+
+# Auto-select the backend; override by hardcoding e.g. backend=gs.cpu below.
+_backend = select_backend()
+print(f"[backend] auto-selected: {getattr(_backend, 'name', _backend)}")
+gs.init(backend=_backend, theme="light")
 
 scene = gs.Scene(
     viewer_options=gs.options.ViewerOptions(
