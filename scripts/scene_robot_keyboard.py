@@ -13,9 +13,13 @@ The biggest difference from the static display scene (scene_robot_tables.py):
   the tables with WASD/QE.
 
 Keys (WASD clashes with Genesis viewer shortcuts, so translation uses the arrow
-keys and rotation uses Q/E):
-  ↑/↓ forward/back, ←/→ strafe left/right, Q/E rotate in place left/right,
+keys and rotation uses , / .):
+  ↑/↓ forward/back, ←/→ strafe left/right, , / . rotate in place left/right,
   combinable (e.g. ↑+←), ESC to quit.
+
+Headless: if the DISPLAY env var is empty/unset, the script runs headless — it
+opens no viewer and reads no keyboard, instead driving the base through a scripted
+path and saving the result to videos/scene_robot_keyboard_<timestamp>.mp4.
 
 Dependency: pip install pynput  (global keyboard listener, same as the original script)
 
@@ -25,10 +29,21 @@ quaternion w-x-y-z, so poses are carried over verbatim.
 
 import math
 import os
+from datetime import datetime
+import warnings
+
+os.environ["TI_LOG_LEVEL"] = "error"
+warnings.filterwarnings("ignore")
 
 import numpy as np
 import genesis as gs
 from pynput import keyboard
+
+# Headless when there is no display (DISPLAY unset or empty). In headless mode we
+# can't open the interactive viewer or read the keyboard, so we drive a scripted
+# motion sequence and record it to a video file instead.
+# HEADLESS = not os.environ.get("DISPLAY")
+HEADLESS = True
 
 ########################## base kinematics constants ##########################
 WHEEL_RADIUS_M = 0.05
@@ -51,8 +66,10 @@ DRIVE_MODULES = (
 
 ########################## init ##########################
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-MJCF_DIR = os.path.join(SCRIPT_DIR, "mjcf")
-URDF_PATH = os.path.join(SCRIPT_DIR, "urdf", "mobile_fr3_duo_v0_2_franka_hand.urdf")
+# Assets live one level up, in <repo>/assets/ (moved out of scripts/).
+ASSETS_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "assets")
+MJCF_DIR = os.path.join(ASSETS_DIR, "mjcf")
+URDF_PATH = os.path.join(ASSETS_DIR, "urdf", "mobile_fr3_duo_v0_2_franka_hand.urdf")
 
 gs.init(backend=gs.gpu)
 # gs.init(backend=gs.amdgpu)
@@ -68,8 +85,23 @@ scene = gs.Scene(
     ),
     # Small step size improves stability (same as keyboard_control.py)
     sim_options=gs.options.SimOptions(dt=0.005, gravity=(0.0, 0.0, -9.81)),
-    show_viewer=True,
+    show_viewer=not HEADLESS,
 )
+
+# In headless mode, add an offscreen camera (same top-down view as the viewer)
+# to record the scripted run to videos/.
+cam = None
+VIDEO_PATH = None
+if HEADLESS:
+    cam = scene.add_camera(
+        res=(960, 640),
+        pos=(0.0, -7.0, 14.0),
+        lookat=(0.0, 0.0, 0.0),
+        fov=40,
+        GUI=False,
+    )
+    _stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    VIDEO_PATH = os.path.join(SCRIPT_DIR, "videos", f"scene_robot_keyboard_{_stamp}.mp4")
 
 ########################## ground ##########################
 # Greatly increase friction to give the drive wheels enough grip
@@ -83,7 +115,7 @@ scene.add_entity(
 # The table was converted from table_edit.usd to MJCF. The conversion baked the
 # 90° (about X) orientation into the body quat, so we only pass pos here. The body
 # has no joint => welded to the world frame by default (equivalent to fixed).
-table_mjcf = os.path.join(SCRIPT_DIR, "mjcf", "table_edit", "table_edit.xml")
+table_mjcf = os.path.join(MJCF_DIR, "table_edit", "table_edit.xml")
 
 # Left column of 5 (X=-2.0) + right column of 5 (X=2.0) + 1 at the bottom center.
 # The top center (0, 4.5) is reserved for the robot.
@@ -244,8 +276,8 @@ def get_keyboard_twist(pressed):
     """Keys -> body-frame (vx, vy, wz).
 
     Note: WASD clashes with Genesis viewer shortcuts, so translation uses the arrow
-    keys and rotation uses Q/E (q/e don't clash with the viewer).
-        ↑/↓  forward/back      ←/→  strafe left/right      Q/E  rotate in place left/right
+    keys and rotation uses , / . (comma/period don't clash with the viewer).
+        ↑/↓  forward/back      ←/→  strafe left/right      , / .  rotate in place left/right
     """
     vx = vy = wz = 0.0
     if "up" in pressed:
@@ -256,9 +288,9 @@ def get_keyboard_twist(pressed):
         vy += LINEAR_SPEED_MPS
     if "right" in pressed:
         vy -= LINEAR_SPEED_MPS
-    if "q" in pressed:
+    if "," in pressed:
         wz += ANGULAR_SPEED_RADPS
-    if "e" in pressed:
+    if "." in pressed:
         wz -= ANGULAR_SPEED_RADPS
     return vx, vy, wz
 
@@ -323,6 +355,31 @@ def compensate_yaw_rate(vx, vy, wz, desired_yaw, manual_rotation):
     return wz + comp, desired_yaw
 
 
+########################## headless scripted motion ##########################
+# When headless there's no keyboard, so drive the base through a fixed sequence of
+# (vx, vy, wz, n_steps) segments to show it off in the recorded video (~7.5 s sim).
+HEADLESS_SCRIPT = [
+    (0.0, 0.0, 0.0, 100),                   # settle in place
+    (LINEAR_SPEED_MPS, 0.0, 0.0, 400),      # drive forward
+    (0.0, 0.0, ANGULAR_SPEED_RADPS, 200),   # rotate in place (left)
+    (0.0, LINEAR_SPEED_MPS, 0.0, 300),      # strafe left
+    (0.0, 0.0, -ANGULAR_SPEED_RADPS, 200),  # rotate in place (right)
+    (-LINEAR_SPEED_MPS, 0.0, 0.0, 300),     # reverse
+]
+HEADLESS_TOTAL_STEPS = sum(seg[3] for seg in HEADLESS_SCRIPT)
+RENDER_EVERY = 4  # render every 4th sim step -> ~50 fps at dt=0.005 (≈ real time)
+
+
+def scripted_twist(step):
+    """Body-frame (vx, vy, wz) for the given headless step index from HEADLESS_SCRIPT."""
+    t = 0
+    for vx, vy, wz, n in HEADLESS_SCRIPT:
+        if step < t + n:
+            return vx, vy, wz
+        t += n
+    return 0.0, 0.0, 0.0
+
+
 ########################## keyboard listener (pynput, global) ##########################
 _pressed = set()
 _listener = None
@@ -344,49 +401,80 @@ def _on_release(key):
         return False
 
 
-_listener = keyboard.Listener(on_press=_on_press, on_release=_on_release)
-_listener.daemon = True
-_listener.start()
+# Only listen for keys in interactive mode; headless has no display/keyboard.
+if not HEADLESS:
+    _listener = keyboard.Listener(on_press=_on_press, on_release=_on_release)
+    _listener.daemon = True
+    _listener.start()
 
 print("=" * 80)
-print("✓ Simulation started!  (Genesis full scene + keyboard control)")
-print("  - 11 tables + 9 letters + 3 cutlery items + 1 controllable robot (top center)")
+if HEADLESS:
+    print("✓ Simulation started!  (Genesis full scene -- HEADLESS, recording video)")
+    print("  - 11 tables + 9 letters + 3 cutlery items + 1 robot driving a scripted path")
+    print(f"  - DISPLAY is empty -> headless; video will be saved to {VIDEO_PATH}")
+else:
+    print("✓ Simulation started!  (Genesis full scene + keyboard control)")
+    print("  - 11 tables + 9 letters + 3 cutlery items + 1 controllable robot (top center)")
+    print("  Controls: ↑/↓ forward/back | ←/→ strafe | , / . rotate in place | combinable | ESC to quit")
 print("=" * 80)
-print("Controls: ↑/↓ forward/back | ←/→ strafe | Q/E rotate in place | combinable | ESC to quit")
-print("=" * 80)
+
+
+def drive_step(vx, vy, wz_cmd, heading_hold_yaw):
+    """Apply one control step (arms locked, base driven) and advance the sim by one step."""
+    wz, heading_hold_yaw = compensate_yaw_rate(
+        vx, vy, wz_cmd, heading_hold_yaw, manual_rotation=abs(wz_cmd) > 1.0e-4
+    )
+
+    # Arms + grippers: locked in the initial pose
+    robot.control_dofs_position(arm_hold_targets, arm_dofs)
+    robot.control_dofs_position(finger_open, finger_dofs)
+
+    # Base: position control for steering, velocity control for the drive wheels
+    cur_steer = robot.get_dofs_position(steering_dofs).cpu().numpy()
+    steer_targets, drive_targets = compute_drive_targets(cur_steer, vx, vy, wz)
+    robot.control_dofs_position(steer_targets, steering_dofs)
+    robot.control_dofs_velocity(drive_targets, drive_dofs)
+
+    scene.step()
+    return wz, heading_hold_yaw
+
+
+def log_progress(count, vx, vy, wz):
+    if count % 100 == 0 and (vx or vy or wz):
+        pos = robot.get_pos().cpu().numpy()
+        print(
+            f"step {count} | vx={vx:+.2f} vy={vy:+.2f} wz={wz:+.2f} | "
+            f"pos [{pos[0]:.2f}, {pos[1]:.2f}] heading {math.degrees(get_root_yaw()):.1f}°"
+        )
+
 
 ########################## control loop ##########################
 heading_hold_yaw = get_root_yaw()
-count = 0
-try:
-    while True:
-        vx, vy, wz_cmd = get_keyboard_twist(_pressed)
-        wz, heading_hold_yaw = compensate_yaw_rate(
-            vx, vy, wz_cmd, heading_hold_yaw, manual_rotation=abs(wz_cmd) > 1.0e-4
-        )
 
-        # Arms + grippers: locked in the initial pose
-        robot.control_dofs_position(arm_hold_targets, arm_dofs)
-        robot.control_dofs_position(finger_open, finger_dofs)
+if HEADLESS:
+    # Run the scripted path for a fixed number of steps, recording every RENDER_EVERY-th frame.
+    cam.start_recording()
+    for count in range(HEADLESS_TOTAL_STEPS):
+        vx, vy, wz_cmd = scripted_twist(count)
+        wz, heading_hold_yaw = drive_step(vx, vy, wz_cmd, heading_hold_yaw)
+        if count % RENDER_EVERY == 0:
+            cam.render()
+        log_progress(count, vx, vy, wz)
+    os.makedirs(os.path.dirname(VIDEO_PATH), exist_ok=True)
+    cam.stop_recording(save_to_filename=VIDEO_PATH, fps=50)
+    print(f"✓ Saved video to {VIDEO_PATH}")
+else:
+    count = 0
+    try:
+        while True:
+            vx, vy, wz_cmd = get_keyboard_twist(_pressed)
+            wz, heading_hold_yaw = drive_step(vx, vy, wz_cmd, heading_hold_yaw)
+            count += 1
+            log_progress(count, vx, vy, wz)
+    except KeyboardInterrupt:
+        print("\n✓ Stopped by user")
+    finally:
+        if _listener is not None:
+            _listener.stop()
 
-        # Base: position control for steering, velocity control for the drive wheels
-        cur_steer = robot.get_dofs_position(steering_dofs).cpu().numpy()
-        steer_targets, drive_targets = compute_drive_targets(cur_steer, vx, vy, wz)
-        robot.control_dofs_position(steer_targets, steering_dofs)
-        robot.control_dofs_velocity(drive_targets, drive_dofs)
-
-        scene.step()
-
-        count += 1
-        if count % 100 == 0 and (vx or vy or wz):
-            pos = robot.get_pos().cpu().numpy()
-            print(
-                f"step {count} | vx={vx:+.2f} vy={vy:+.2f} wz={wz:+.2f} | "
-                f"pos [{pos[0]:.2f}, {pos[1]:.2f}] heading {math.degrees(get_root_yaw()):.1f}°"
-            )
-except KeyboardInterrupt:
-    print("\n✓ Stopped by user")
-finally:
-    if _listener is not None:
-        _listener.stop()
-    print("✓ Done!")
+print("✓ Done!")
