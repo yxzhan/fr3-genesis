@@ -1,0 +1,24 @@
+<mujoco model="scene_bowl">
+  <compiler angle="degree" meshdir="meshes" texturedir="textures"/>
+  <option gravity="0 0 -9.81"/>
+  <default>
+    <joint armature="0.01" damping="0.5"/>
+    <default class="visual">
+      <geom contype="0" conaffinity="0" group="2"/>
+    </default>
+    <default class="collision">
+      <geom rgba="0.9 0.9 0.0 0.2" group="3"/>
+    </default>
+  </default>
+  <asset>
+    <material name="M_mat0_011" rgba="0.9823 1.0000 0.0849 1.0000"/>
+    <mesh name="ImagetostlMesh0010" file="ImagetostlMesh0010.obj"/>
+  </asset>
+  <worldbody>
+    <body name="imagetostl_mesh_0_010" pos="0.000000 0.000000 0.000000" quat="0.707107 0.707107 0.000000 0.000000">
+      <freejoint/>
+      <geom type="mesh" mesh="ImagetostlMesh0010" class="visual" material="M_mat0_011"/>
+      <geom name="imagetostl_mesh_0010_aabb" type="box" pos="-0.0000 0.0431 -0.0000" size="0.0390 0.0430 0.0390" class="collision"/>
+    </body>
+  </worldbody>
+</mujoco>

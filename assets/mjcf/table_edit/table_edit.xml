@@ -1,0 +1,27 @@
+<mujoco model="scene_table_edit">
+  <compiler angle="degree" meshdir="meshes" texturedir="textures"/>
+  <option gravity="0 0 -9.81"/>
+  <default>
+    <joint armature="0.01" damping="0.5"/>
+    <default class="visual">
+      <geom contype="0" conaffinity="0" group="2"/>
+    </default>
+    <default class="collision">
+      <geom rgba="0.9 0.9 0.0 0.2" group="3"/>
+    </default>
+  </default>
+  <asset>
+    <material name="M_mat0_013" rgba="0.8471 0.8471 0.8471 1.0000"/>
+    <mesh name="ImagetostlMesh0012" file="ImagetostlMesh0012.obj"/>
+  </asset>
+  <worldbody>
+    <body name="imagetostl_mesh_0_012" pos="0.000000 0.000000 0.000000" quat="0.707107 0.707107 0.000000 0.000000">
+      <geom type="mesh" mesh="ImagetostlMesh0012" class="visual" material="M_mat0_013"/>
+      <geom name="table_top"  type="box" pos="0.0000 0.7255 0.0000" size="0.3700 0.0250 0.3700" class="collision"/>
+      <geom name="table_leg_0" type="box" pos="0.3420 0.3500 0.3520" size="0.0280 0.3500 0.0180" class="collision"/>
+      <geom name="table_leg_1" type="box" pos="0.3420 0.3500 -0.3520" size="0.0280 0.3500 0.0180" class="collision"/>
+      <geom name="table_leg_2" type="box" pos="-0.3420 0.3500 0.3520" size="0.0280 0.3500 0.0180" class="collision"/>
+      <geom name="table_leg_3" type="box" pos="-0.3420 0.3500 -0.3520" size="0.0280 0.3500 0.0180" class="collision"/>
+    </body>
+  </worldbody>
+</mujoco>
