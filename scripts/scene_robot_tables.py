@@ -268,14 +268,14 @@ class RobotScene:
 
         self._build_scene()
 
-        if not headless:
-            self.scene.viewer.add_plugin(
-                gs.vis.viewer_plugins.MouseInteractionPlugin(
-                    use_force=True,  # False = set position, True = spring force
-                    spring_const=1000.0,
-                    color=(0.1, 0.6, 0.8, 0.6),
-                )
-            )
+        # if not headless:
+        #     self.scene.viewer.add_plugin(
+        #         gs.vis.viewer_plugins.MouseInteractionPlugin(
+        #             use_force=True,  # False = set position, True = spring force
+        #             spring_const=1000.0,
+        #             color=(0.1, 0.6, 0.8, 0.6),
+        #         )
+        #     )
         self.scene.build()
 
         self._setup_handles()
@@ -463,9 +463,9 @@ class RobotScene:
             self._apply_joint_targets()
             self.scene.step()
             if self._recording and self._frame_count % RENDER_EVERY == 0:
-                self.cam.render()
+                self.cam.render(rgb=True)
                 self.head_cam.move_to_attach()  # keep the head cam on the moving link
-                self.head_cam.render()
+                self.head_cam.render(rgb=True)
             self._frame_count += 1
         return self
 
