@@ -10,6 +10,9 @@ dependencies = [
     "genesis-world",
     "pynput",
     "numpy",
+    "ipywidgets",
+    "sidecar",
+    "tqdm",
 ]
 
 # Install exactly one PyTorch extra for your hardware (mutually exclusive, see

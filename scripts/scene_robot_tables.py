@@ -79,13 +79,34 @@ ARM_HOLD = {
 }
 
 GRIPPER_OPEN = 0.04  # finger opening, meters (per finger)
-DOWN_QUAT = np.array([0.0, 1.0, 0.0, 0.0])  # gripper pointing straight down (w-x-y-z)
+
+
+def _quat_mul(a, b):
+    """Hamilton product of two w-x-y-z quaternions (a applied first, then b)."""
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return np.array([
+        aw * bw - ax * bx - ay * by - az * bz,
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+    ])
+
+
+# The Franka hand frame sits 45° about z from link7 (where we run IK), so a plain
+# "straight down" target [0,1,0,0] leaves the gripper yawed 45° in the world. Fold a
+# -45° z-rotation into the target to cancel it. Flip GRIPPER_YAW_FIX's sign if the
+# fingers end up rotated the *other* way by 90°.
+GRIPPER_YAW_FIX = -math.pi / 4
+_DOWN = np.array([0.0, 1.0, 0.0, 0.0])  # link7 pointing straight down (w-x-y-z)
+_RZ = np.array([math.cos(0.5 * GRIPPER_YAW_FIX), 0.0, 0.0, math.sin(0.5 * GRIPPER_YAW_FIX)])
+DOWN_QUAT = _quat_mul(_DOWN, _RZ)  # gripper down, fingers aligned to world axes
 # Genesis fuses the fixed-joint hand_tcp frame into link7, so we IK on link7 and
-# offset down to the finger TCP (same value as fr3_genesis.py). Assumes gripper-down.
+# offset down to the finger TCP 
 TCP_OFFSET = 0.166
 
-RENDER_EVERY = 4   # record every 4th sim step -> ~50 fps at dt=0.005 (≈ real time)
-VIDEO_FPS = 50
+RENDER_EVERY = 8   # record every 4th sim step -> ~50 fps at dt=0.005 (≈ real time)
+VIDEO_FPS = 25
 
 # Robot-mounted head camera (attached to the URDF's head_camera_mounting_point link).
 HEAD_CAM_LINK = "head_camera_mounting_point"
@@ -488,6 +509,18 @@ class RobotScene:
     def stop_base(self, steps=1):
         """Zero the base velocity (and optionally keep stepping in place)."""
         return self.set_base_velocity(0.0, 0.0, 0.0, steps)
+
+    def reset_pose(self, settle=100):
+        """Return both arms to the tucked ``ARM_HOLD`` pose and open the grippers.
+
+        Drives the joints back via the position controllers (then steps ``settle`` times
+        to let them arrive) -- useful to undo earlier joint/IK moves before a new task.
+        """
+        for s in ("left", "right"):
+            self._arm_target[s] = np.array([ARM_HOLD[n] for n in self.arm_joint_names[s]])
+            self._finger_target[s] = np.full(2, GRIPPER_OPEN)
+        self.step(settle)
+        return self
 
     def teleport_base(self, x, y, yaw=None, settle=100):
         """Instantly move the base to world ``(x, y)`` (z kept) with optional ``yaw`` (rad).
