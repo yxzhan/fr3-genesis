@@ -342,6 +342,16 @@ class RobotScene:
                 surface=gs.surfaces.Default(color=cfg["color"]),
             )
 
+        # ---- a small pickable cube on the cutlery table (robot-facing corner) ----
+        # Dynamic (not fixed) so an arm can grasp it; it settles onto the table during
+        # the init settle loop. Exposed as ``self.cube`` so callers can read its live
+        # pose with ``self.cube.get_pos()``.
+        self.cube = self.scene.add_entity(
+            gs.morphs.Box(size=(0.04, 0.04, 0.04), pos=(-1.82, 3.18, 0.80)),
+            surface=gs.surfaces.Default(color=(0.0, 0.8, 0.2)),
+            material=gs.materials.Rigid(friction=2.0),
+        )
+
         # ---- robot (free base, top center) ----
         # links_to_keep preserves the head-camera mount link (a fixed-joint link that would
         # otherwise be merged away) so the head camera can be attached to it after build.
@@ -478,6 +488,24 @@ class RobotScene:
     def stop_base(self, steps=1):
         """Zero the base velocity (and optionally keep stepping in place)."""
         return self.set_base_velocity(0.0, 0.0, 0.0, steps)
+
+    def teleport_base(self, x, y, yaw=None, settle=100):
+        """Instantly move the base to world ``(x, y)`` (z kept) with optional ``yaw`` (rad).
+
+        Unlike ``set_base_velocity`` this does not drive the wheels -- it snaps the free
+        base to the new pose, zeroes the commanded twist, then steps ``settle`` times so
+        the arms re-settle and the heading-hold reference is re-anchored.
+        """
+        pos = self.get_pos()
+        pos[0], pos[1] = float(x), float(y)
+        self.robot.set_pos(pos)
+        if yaw is not None:
+            half = 0.5 * float(yaw)
+            self.robot.set_quat(np.array([math.cos(half), 0.0, 0.0, math.sin(half)]))
+        self._twist = (0.0, 0.0, 0.0)
+        self.step(settle)
+        self._heading_hold_yaw = self.get_yaw()
+        return self
 
     def get_pos(self):
         return self.robot.get_pos().cpu().numpy()
