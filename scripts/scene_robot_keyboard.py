@@ -31,6 +31,9 @@ import math
 import os
 from datetime import datetime
 import warnings
+import numpy as np
+import genesis as gs
+import logging
 
 os.environ["TI_LOG_LEVEL"] = "error"
 warnings.filterwarnings("ignore")
@@ -39,11 +42,9 @@ warnings.filterwarnings("ignore")
 # before importing pynput below: pynput opens an X connection at import time and
 # crashes on a headless machine. In headless mode we can't open the viewer or read
 # the keyboard, so we drive a scripted motion sequence and record it to a video.
-# HEADLESS = not os.environ.get("DISPLAY")
-HEADLESS = True
 
-import numpy as np
-import genesis as gs
+HEADLESS = not os.environ.get("DISPLAY")
+# HEADLESS = True
 
 # pynput requires a display; import it only in interactive mode so headless runs
 # don't fail at import time.
@@ -215,7 +216,8 @@ robot = scene.add_entity(
 
 ########################## build ##########################
 scene.build()
-
+# Set logger to warning to avoid log info.
+gs.logger._logger.setLevel(logging.WARNING)
 
 # ---- joint / dof handles ----
 def dof(name):
