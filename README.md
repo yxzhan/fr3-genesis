@@ -1,16 +1,19 @@
 # fr3-genesis
 
-[中文](README.zh-CN.md)
-
-Genesis examples for the `mobile_fr3_duo` dual-arm mobile robot: pick-and-place,
-keyboard teleoperation, and scene display.
+Genesis examples for the `mobile_fr3_duo` dual-arm mobile robot: a reusable
+scene/robot library and keyboard teleoperation.
 
 Scripts under `scripts/`:
 
-- `fr3_genesis.py` — pick-and-place demo with the left arm + gripper (records a video to `videos/`).
-- `keyboard_control.py` — WASD/arrow-key teleop of the mobile base + both arms locked in pose.
-- `scene_robot_keyboard.py` — full scene (tables/letters/tableware) + a controllable robot.
-- `scene_robot_tables.py` — static scene display, no manipulation task.
+- `scene_robot_tables.py` — reusable `RobotScene` library. Builds the full scene
+  (tables / letters / tableware) with a mobile dual-arm robot you can drive,
+  joint-control, and move via IK; supports headless rendering and head-camera +
+  top-down video recording. Import it (see `notebooks/robot_scene_demo.ipynb`) or
+  run it directly for a short demo.
+- `scene_robot_keyboard.py` — full scene + keyboard teleop of the mobile base
+  (arrow keys to translate, `,` / `.` to rotate); records a scripted video when headless.
+
+A worked example of the `RobotScene` API lives in `notebooks/robot_scene_demo.ipynb`.
 
 ## Installation
 
@@ -51,10 +54,12 @@ uv sync --extra rocm         # AMD GPU (Linux only): ROCm 7.2 build of PyTorch
 ### 3. Run
 
 ```bash
-uv run python scripts/fr3_genesis.py
-uv run python scripts/keyboard_control.py
+# reusable scene library — runs a short demo; --save-video writes a top-down + head-camera mp4
+uv run python scripts/scene_robot_tables.py --headless --save-video
+
+# keyboard teleop (needs a display; falls back to a scripted video when headless)
+uv run python scripts/scene_robot_keyboard.py
 ```
 
-> Note: the pick-and-place demo (`fr3_genesis.py`) uses the `gs.gpu` backend by
-> default. For a CPU-only install, change `gs.init(backend=gs.gpu)` to
-> `gs.init(backend=gs.cpu)` in the script.
+> Note: both scripts auto-select the Genesis backend (CUDA → ROCm → Metal → CPU)
+> based on your hardware, so no manual backend edit is needed.
