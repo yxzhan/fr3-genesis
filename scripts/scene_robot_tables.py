@@ -81,6 +81,14 @@ ARM_HOLD = {
 
 GRIPPER_OPEN = 0.04  # finger opening, meters (per finger)
 
+# Vertical spine lift (prismatic) that raises/lowers the whole dual-arm mount.
+# URDF limits: 0.0 (lowest) .. 0.85 m, effort 100 N. It must actively hold the arm
+# assembly against gravity, otherwise the DOF (kp=0 by default) sags. We position-
+# servo it and hold it at SPINE_HOLD by default.
+SPINE_JOINT_NAME = "franka_spine_vertical_joint"
+SPINE_LOWER, SPINE_UPPER = 0.0, 0.85
+SPINE_HOLD = 0.0  # default lift height, meters
+
 
 def _quat_mul(a, b):
     """Hamilton product of two w-x-y-z quaternions (a applied first, then b)."""
@@ -434,6 +442,10 @@ class RobotScene:
         # IK target frame: link7 (Genesis fuses the hand_tcp fixed link into it).
         self.ee_link = {s: self.robot.get_link(f"{s}_fr3v2_link7") for s in ("left", "right")}
 
+        # Vertical spine lift (single prismatic dof), position-servoed and held.
+        self.spine_dof = self._dof(SPINE_JOINT_NAME)
+        self._spine_target = SPINE_HOLD
+
         # Active base joints.
         self.steering_dofs = [self._dof(m[0]) for m in DRIVE_MODULES]
         self.drive_dofs = [self._dof(m[1]) for m in DRIVE_MODULES]
@@ -458,6 +470,11 @@ class RobotScene:
         r.set_dofs_kp(np.full(n_arm, 5000.0), self._all_arm_dofs)
         r.set_dofs_kv(np.full(n_arm, 500.0), self._all_arm_dofs)
         r.set_dofs_force_range(np.full(n_arm, -200.0), np.full(n_arm, 200.0), self._all_arm_dofs)
+        # Vertical spine lift: stiff position control (must hold the arm assembly's
+        # weight against gravity; generous force range so it doesn't sag).
+        r.set_dofs_kp(np.array([8000.0]), [self.spine_dof])
+        r.set_dofs_kv(np.array([800.0]), [self.spine_dof])
+        r.set_dofs_force_range(np.array([-2000.0]), np.array([2000.0]), [self.spine_dof])
         # Grippers: position control.
         r.set_dofs_kp(np.full(n_fin, 200.0), self._all_finger_dofs)
         r.set_dofs_kv(np.full(n_fin, 20.0), self._all_finger_dofs)
@@ -480,6 +497,7 @@ class RobotScene:
             q_init[self._dof(n)] = v
         for d in self._all_finger_dofs:
             q_init[d] = GRIPPER_OPEN
+        q_init[self.spine_dof] = self._spine_target
         self.robot.set_dofs_position(q_init)
         # Let the free base settle on the ground.
         for _ in range(200):
@@ -488,7 +506,8 @@ class RobotScene:
 
     # ----------------------------------------------------------- control
     def _apply_joint_targets(self):
-        """Re-issue the stored arm + gripper position targets (called every sim step)."""
+        """Re-issue the stored arm + gripper + spine position targets (called every sim step)."""
+        self.robot.control_dofs_position(np.array([self._spine_target]), [self.spine_dof])
         for s in ("left", "right"):
             self.robot.control_dofs_position(self._arm_target[s], self.arm_dofs[s])
             self.robot.control_dofs_position(self._finger_target[s], self.finger_dofs[s])
@@ -597,6 +616,17 @@ class RobotScene:
         if step:
             self.step(steps)
         return self
+
+    def set_spine(self, height, step=False, steps=1):
+        """Set the vertical spine lift height (meters), clamped to [0.0, 0.85]."""
+        self._spine_target = max(SPINE_LOWER, min(SPINE_UPPER, float(height)))
+        if step:
+            self.step(steps)
+        return self
+
+    def get_spine(self):
+        """Current vertical spine lift height (meters)."""
+        return float(self.robot.get_dofs_position([self.spine_dof]).cpu().numpy()[0])
 
     # IK --------------------------------------------------------------
     def _tcp_of(self, side):

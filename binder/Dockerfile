@@ -29,15 +29,23 @@ RUN curl -LO https://github.com/yxzhan/vscode_remote_desktop/releases/download/v
     code-server --install-extension vscode-remote-desktop-0.1.0.vsix && \
     rm vscode-remote-desktop-0.1.0.vsix
 
-# Install UV
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-
 # Install Claude code
 RUN curl -fsSL https://claude.ai/install.sh | bash
+
+# Install UV
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Copy content to the image
 COPY . ${REPO_DIR}/
 RUN git config --global --add safe.directory ${REPO_DIR}
+
+# Build the project venv (.venv) and register it as a Jupyter kernel.
+# UV_EXTRA selects the PyTorch build: cpu | cu126 | rocm (default: cpu).
+ARG UV_EXTRA=cpu
+RUN uv sync --extra ${UV_EXTRA} && \
+    uv pip install ipykernel && \
+    uv run python -m ipykernel install --user \
+        --name genesis --display-name "Python (Genesis)"
 
 # Set JupyterLab default directory
 WORKDIR ${REPO_DIR}
