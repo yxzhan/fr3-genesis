@@ -1,0 +1,31 @@
+version: '3'
+services:
+  fr3-genesis:
+    image: fr3-genesis
+    build:
+      context: ../
+      dockerfile: ./binder/Dockerfile
+    stdin_open: true
+    tty: true
+    user: root
+    working_dir: /home/repo
+    # entrypoint: /home/jovyan/work/binder/entrypoint.sh
+    command: jupyter lab --allow-root --NotebookApp.token='' --no-browser --ip=0.0.0.0
+    ports:
+      - 8888:8888
+    volumes:
+      - ../:/home/repo:rw
+    Use Host Display
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw  # X11 socket for GUI apps
+    environment:
+      - DISPLAY=${DISPLAY}  # Use host display for GUI apps
+    # GPU support
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
