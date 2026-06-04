@@ -2,7 +2,12 @@
 
 **Date:** 2026-06-04
 **Status:** approved (pending spec review)
-**File touched:** `scripts/scene_robot_tables.py` (+ `notebooks/`, CLI)
+**Files touched:**
+- `scripts/scene_robot_tables.py` — all batching logic, incl. the CLI
+  (`_parse_args` / `main` / `demo`), lives in this one module.
+- `notebooks/parallel_demo.ipynb` — **new** demo notebook (see Deliverables).
+- `notebooks/robot_scene_demo.ipynb` — **unchanged** (the `n_envs=1` scalar path
+  preserves its current behavior).
 
 ## Goal
 
@@ -106,6 +111,16 @@ Thin wrappers used by the core so it always sees `[N, ...]`:
 - `demo()`: when batched, issue per-env-varied commands (e.g. random per-env
   `angular_speed`/twist, à la PhySim04) to visibly exercise parallelism;
   unchanged single-env path when `N==1`.
+
+## Deliverables
+
+1. Batched `scripts/scene_robot_tables.py` (above).
+2. **New** `notebooks/parallel_demo.ipynb`, modeled on PhySim04:
+   `RobotScene(n_envs=9, ...)`, assign each env a different base/arm command
+   (e.g. random `angular_speed`), step, record the grid video, embed it inline.
+   Imports via the package (`from fr3_genesis import RobotScene`), like the
+   existing notebook.
+3. `notebooks/robot_scene_demo.ipynb` stays as-is (regression target).
 
 ## Data flow (batched step)
 
