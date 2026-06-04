@@ -7,7 +7,7 @@ readme = "README.md"
 requires-python = ">=3.10,<3.13"
 
 dependencies = [
-    "genesis-world",
+    "genesis-world==0.4.6",
     "pynput",
     "numpy",
     "ipywidgets",
@@ -22,6 +22,30 @@ dependencies = [
 cpu = ["torch"]
 cu126 = ["torch"]
 rocm = ["torch"]
+
+# CLI entry point: runs the demo (RobotScene + smoke test).
+[project.scripts]
+fr3-genesis = "fr3_genesis:main"
+
+# ---- packaging --------------------------------------------------------------
+# Build a real, pip-installable package. The runnable module lives in scripts/ and
+# the assets at the repo root; hatch maps both into the fr3_genesis package inside
+# the built wheel (force-include), so the source tree layout is left untouched.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["fr3_genesis"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"scripts/scene_robot_tables.py" = "fr3_genesis/scene_robot_tables.py"
+"assets" = "fr3_genesis/assets"
+
+# Same mapping for the source distribution so `assets/` ships in the sdist too.
+[tool.hatch.build.targets.sdist.force-include]
+"scripts/scene_robot_tables.py" = "fr3_genesis/scene_robot_tables.py"
+"assets" = "fr3_genesis/assets"
 
 [tool.uv]
 # Pick one of cpu / cu126 / rocm; installing more than one is disallowed.

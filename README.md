@@ -63,3 +63,37 @@ uv run python scripts/scene_robot_keyboard.py
 
 > Note: both scripts auto-select the Genesis backend (CUDA → ROCm → Metal → CPU)
 > based on your hardware, so no manual backend edit is needed.
+
+## Install as a package (`fr3_genesis`)
+
+The project is also a pip-installable package that bundles the bundled `assets/`
+(URDF / MJCF / convex-decomposition cache), exposing `from fr3_genesis import RobotScene`.
+
+### From the git repository, without dependencies
+
+Install only this project's code + assets, **without** pulling in `genesis-world`,
+`torch`, etc. (use this when those dependencies are already present in your
+environment):
+
+```bash
+pip install --no-deps git+https://github.com/yxzhan/fr3-genesis.git
+# or pin a branch / tag / commit:
+pip install --no-deps git+https://github.com/yxzhan/fr3-genesis.git@main
+# with uv:
+uv pip install --no-deps git+https://github.com/yxzhan/fr3-genesis.git
+```
+
+Then:
+
+```python
+from fr3_genesis import RobotScene
+sim = RobotScene(headless=True)
+```
+
+Notes:
+- `--no-deps` skips dependency installation but **still builds the package**, so
+  `assets/` (incl. the large URDF meshes) are downloaded and installed.
+- At runtime `genesis` and the other dependencies must already be importable in
+  your environment, otherwise `import fr3_genesis` raises `ModuleNotFoundError`.
+  Drop `--no-deps` (and add a torch extra) to install everything:
+  `pip install "fr3-genesis[cpu] @ git+https://github.com/yxzhan/fr3-genesis.git"`.

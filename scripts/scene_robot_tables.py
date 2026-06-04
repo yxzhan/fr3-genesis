@@ -134,8 +134,26 @@ HEAD_CAM_OFFSET_T = np.array([
 
 ########################## asset paths ##########################
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-# Assets live one level up, in <repo>/assets/ (moved out of scripts/).
-ASSETS_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "assets")
+
+
+def _find_assets_dir():
+    """Locate the assets/ directory in both the source repo and an installed wheel.
+
+    * Installed as the ``fr3_genesis`` package, assets are bundled alongside this
+      module: ``<package>/assets``.
+    * Running from the source tree (scripts/scene_robot_tables.py), they live one
+      level up at ``<repo>/assets``.
+    """
+    for candidate in (
+        os.path.join(SCRIPT_DIR, "assets"),                  # installed wheel
+        os.path.join(os.path.dirname(SCRIPT_DIR), "assets"),  # source repo
+    ):
+        if os.path.isdir(candidate):
+            return candidate
+    return os.path.join(os.path.dirname(SCRIPT_DIR), "assets")
+
+
+ASSETS_DIR = _find_assets_dir()
 MJCF_DIR = os.path.join(ASSETS_DIR, "mjcf")
 URDF_PATH = os.path.join(ASSETS_DIR, "urdf", "mobile_fr3_duo_v0_2_franka_hand.urdf")
 VIDEO_DIR = os.path.join(SCRIPT_DIR, "videos")
@@ -276,7 +294,9 @@ class RobotScene:
     video_path : str | None
         Output mp4 path; defaults to a timestamped file under ``scripts/videos/``.
     backend : genesis backend | None
-        e.g. ``gs.cpu``. None -> auto (``select_backend``).
+        e.g. ``gs.cpu``. None -> auto (``select_backend``), which honors the
+        ``FR3_BACKEND`` env var (cpu/cuda/amd/metal) to force a backend before
+        falling back to auto-detection. An explicit value here overrides both.
     camera_res : (int, int)
         Offscreen camera resolution (width, height).
     """
@@ -756,9 +776,7 @@ def _parse_args(argv=None):
 
 
 def _resolve_backend(name):
-    return {
-        "auto": None, "cpu": gs.cpu, "cuda": gs.cuda, "amd": gs.amdgpu, "metal": gs.metal,
-    }[name]
+    return _backend_from_name(name)
 
 
 def main(argv=None):
