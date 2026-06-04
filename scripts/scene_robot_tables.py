@@ -324,16 +324,31 @@ class RobotScene:
         falling back to auto-detection. An explicit value here overrides both.
     camera_res : (int, int)
         Offscreen camera resolution (width, height).
+    n_envs : int
+        Number of parallel environments. 1 (default) builds a single non-batched
+        scene with the classic scalar API. >1 builds ``n_envs`` copies; getters
+        then return a leading ``[n_envs, ...]`` dim and setters accept either a
+        scalar/per-dof value (broadcast to all envs) or a full ``[n_envs, ...]`` array.
+    env_spacing : (float, float)
+        Grid spacing between parallel envs (only used when n_envs > 1).
 
     Recording is opt-in and decided by the caller: call ``start_recording()`` to begin
     capturing frames, then ``save_video(path)`` (or ``close()``) to write the mp4. If you
     never call ``start_recording()``, no frames are captured and ``save_video()`` is a no-op.
     """
 
-    def __init__(self, headless=None, backend=None, camera_res=(960, 640)):
+    def __init__(self, headless=None, save_video=False, video_path=None,
+                 backend=None, camera_res=(960, 640), n_envs=1, env_spacing=(2.0, 2.0)):
+        if int(n_envs) < 1:
+            raise ValueError(f"n_envs must be >= 1, got {n_envs}")
         if headless is None:
             headless = not os.environ.get("DISPLAY")
         self.headless = headless
+        self.n_envs = int(n_envs)
+        self.batched = self.n_envs > 1
+        self.env_spacing = env_spacing
+        self._record = bool(save_video)
+        self.video_path = video_path
         self._recording = False
         self._frame_count = 0
 
@@ -376,7 +391,10 @@ class RobotScene:
         #             color=(0.1, 0.6, 0.8, 0.6),
         #         )
         #     )
-        self.scene.build()
+        if self.batched:
+            self.scene.build(n_envs=self.n_envs, env_spacing=self.env_spacing)
+        else:
+            self.scene.build()
 
         self._setup_handles()
         self._setup_gains()
