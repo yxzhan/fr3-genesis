@@ -242,39 +242,56 @@ def _steering_alignment_scale(error):
     return np.clip(scale, 0.0, 1.0)
 
 
+# Module geometry, cached as [M] arrays for the vectorized drive solver.
+_MODULE_X = np.array([m[2] for m in DRIVE_MODULES], dtype=float)
+_MODULE_Y = np.array([m[3] for m in DRIVE_MODULES], dtype=float)
+
+
 def compute_drive_targets(cur_steer_angles, vx, vy, wz):
-    """Body twist -> (steer-angle targets, wheel-speed targets), with 180° flip optimization and speed limiting."""
-    steer_targets = np.zeros(len(DRIVE_MODULES))
-    drive_targets = np.zeros(len(DRIVE_MODULES))
+    """Body twist -> (steer-angle targets, wheel-speed targets), batched over envs.
 
-    vectors = []
-    max_speed = 0.0
-    for (_s, _d, x, y) in DRIVE_MODULES:
-        wvx = vx - wz * y
-        wvy = vy + wz * x
-        sp = math.hypot(wvx, wvy)
-        vectors.append((wvx, wvy, sp))
-        max_speed = max(max_speed, sp)
+    Parameters
+    ----------
+    cur_steer_angles : array [B, M]   current steer angle per module, per env
+    vx, vy, wz        : array [B]      body-frame twist per env
+    Returns (steer_targets[B, M], drive_targets[B, M]).
 
+    Vectorized form of the original per-module scalar loop: per-env global speed
+    limiting, the 180-degree steer-flip optimization, holding the steer angle when
+    a module's commanded speed is ~0, and the steering-alignment speed fade.
+    """
+    cur = np.atleast_2d(np.asarray(cur_steer_angles, dtype=float))  # [B, M]
+    vx = np.atleast_1d(np.asarray(vx, dtype=float))                 # [B]
+    vy = np.atleast_1d(np.asarray(vy, dtype=float))
+    wz = np.atleast_1d(np.asarray(wz, dtype=float))
+
+    # Per-module world velocity at each wheel: [B, M]
+    wvx = vx[:, None] - wz[:, None] * _MODULE_Y[None, :]
+    wvy = vy[:, None] + wz[:, None] * _MODULE_X[None, :]
+    sp = np.hypot(wvx, wvy)                                         # [B, M]
+
+    # Per-env speed limit, scaling the whole env's module set together.
     allowed = MAX_WHEEL_SPEED_RADPS * WHEEL_RADIUS_M
-    scale = allowed / max_speed if max_speed > allowed else 1.0
+    max_speed = sp.max(axis=1)                                     # [B]
+    scale = np.where(max_speed > allowed, allowed / np.maximum(max_speed, 1e-12), 1.0)
+    scale = scale[:, None]                                         # [B, 1]
+    wvx = wvx * scale
+    wvy = wvy * scale
+    sp = sp * scale
 
-    for i, (wvx, wvy, sp) in enumerate(vectors):
-        wvx *= scale
-        wvy *= scale
-        sp *= scale
-        cur = cur_steer_angles[i]
-        if sp < STOP_EPS:
-            steer_targets[i] = cur  # when stopped, hold the current steer angle; don't snap back
-            continue
-        raw = math.atan2(wvy, wvx)
-        direct = _wrap_to_pi(raw - cur)
-        flipped = _wrap_to_pi(raw + math.pi - cur)
-        use_flipped = abs(flipped) < abs(direct)
-        delta = flipped if use_flipped else direct
-        steer_targets[i] = cur + delta
-        wheel_speed = (sp / WHEEL_RADIUS_M) * _steering_alignment_scale(abs(delta))
-        drive_targets[i] = -wheel_speed if use_flipped else wheel_speed
+    moving = sp >= STOP_EPS                                        # [B, M]
+    raw = np.arctan2(wvy, wvx)
+    direct = _wrap_to_pi(raw - cur)
+    flipped = _wrap_to_pi(raw + math.pi - cur)
+    use_flipped = np.abs(flipped) < np.abs(direct)
+    delta = np.where(use_flipped, flipped, direct)
+
+    # Hold current steer where stopped; otherwise rotate by the smaller delta.
+    steer_targets = np.where(moving, cur + delta, cur)
+
+    wheel_speed = (sp / WHEEL_RADIUS_M) * _steering_alignment_scale(np.abs(delta))
+    drive = np.where(use_flipped, -wheel_speed, wheel_speed)
+    drive_targets = np.where(moving, drive, 0.0)
 
     return steer_targets, drive_targets
 
