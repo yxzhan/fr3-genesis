@@ -140,6 +140,23 @@ uv run python scripts/scene_robot_tables.py --headless --save-video
 uv run python scripts/scene_robot_keyboard.py
 ```
 
+### Parallel / batched simulation
+
+Run many copies of the scene at once by passing `n_envs`:
+
+```python
+from fr3_genesis import RobotScene
+import numpy as np
+
+sim = RobotScene(headless=True, n_envs=9, env_spacing=(8.0, 14.0))
+sim.set_base_velocity(0.0, 0.0, np.linspace(-1.2, 1.2, 9), steps=300)  # per-env yaw
+print(sim.get_yaw().shape)   # (9,)
+```
+
+With `n_envs=1` (default) the API is scalar exactly as before; with `n_envs>1`
+getters return a leading `[n_envs, ...]` dim and setters accept a scalar/per-dof
+value (broadcast) or a full `[n_envs, ...]` array. See `notebooks/parallel_demo.ipynb`.
+
 ## Install as a package (`fr3_genesis`)
 
 The project is also a pip-installable package that bundles the bundled `assets/`
