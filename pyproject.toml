@@ -47,6 +47,13 @@ packages = ["fr3_genesis"]
 "scripts/scene_robot_tables.py" = "fr3_genesis/scene_robot_tables.py"
 "assets" = "fr3_genesis/assets"
 
+# ipykernel is needed to register the venv as a Jupyter kernel (notebooks / Binder).
+# It lives in the default-installed "dev" group so `uv sync` keeps it instead of
+# pruning it — installing it out-of-band with `uv pip install` does not survive a
+# later `uv sync`.
+[dependency-groups]
+dev = ["ipykernel"]
+
 [tool.uv]
 # Pick one of cpu / cu126 / rocm; installing more than one is disallowed.
 conflicts = [

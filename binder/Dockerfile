@@ -41,8 +41,9 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 # stays cached. UV_EXTRA selects the PyTorch build: cpu | cu126 | rocm.
 ARG UV_EXTRA=cpu
 COPY pyproject.toml ${REPO_DIR}/
-RUN uv sync --extra ${UV_EXTRA} --no-install-project && \
-    uv pip install ipykernel
+# Installs third-party deps + the "dev" group (ipykernel); --no-install-project
+# skips the local package so this layer stays cached across source edits.
+RUN uv sync --extra ${UV_EXTRA} --no-install-project
 
 # ---- Project layer ----------------------------------------------------------
 # Now copy the full source. This layer is rebuilt whenever any file changes, but
