@@ -132,6 +132,52 @@ HEAD_CAM_OFFSET_T = np.array([
     [0.0, 0.0, 0.0, 1.0],
 ])
 
+########################## high-quality (Nyx ray-tracing) rendering ##########################
+# When RobotScene is created with high_quality=True, the main offscreen camera is a Nyx
+# ray-tracing sensor (FastPathTracer) instead of the default rasterizer. The head camera
+# always stays raster (fast; it's the robot-POV stream). The plugin is an optional
+# dependency (``pip install gs-nyx gs-nyx-plugin``) and is imported lazily so the normal
+# rasterized path has no extra requirements.
+NYX_DEFAULT_SPP = 64  # samples per pixel: higher = cleaner but slower
+
+# A single directional key light so the path tracer produces shaded frames with shadows.
+NYX_LIGHTS = [{
+    "type": "directional",
+    "dir": (-0.4, -0.4, -0.8),
+    "color": (1.0, 1.0, 1.0),
+    "intensity": 5.0,
+    "shadow": True,
+}]
+
+_NYX = None  # cached (NyxCameraOptions, npr) module handles after first import
+
+
+def _import_nyx():
+    """Lazily import the Nyx ray-tracing plugin (only needed for high_quality=True)."""
+    global _NYX
+    if _NYX is None:
+        try:
+            import gs_nyx.nyx_py_renderer as npr
+            from gs_nyx_plugin.nyx_camera_options import NyxCameraOptions
+        except ImportError as e:
+            raise ImportError(
+                "high_quality=True requires the Nyx ray-tracing plugin. "
+                "Install it with: pip install gs-nyx gs-nyx-plugin"
+            ) from e
+        _NYX = (NyxCameraOptions, npr)
+    return _NYX
+
+
+def _to_numpy(x):
+    """Convert a (possibly GPU) tensor or array to a numpy array, dropping a batch dim."""
+    if hasattr(x, "cpu"):
+        x = x.cpu().numpy()
+    x = np.asarray(x)
+    if x.ndim == 4:  # (n_env, H, W, 3) in single-env mode -> drop the leading env axis
+        x = x[0]
+    return x
+
+
 ########################## asset paths ##########################
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -296,18 +342,30 @@ class RobotScene:
         falling back to auto-detection. An explicit value here overrides both.
     camera_res : (int, int)
         Offscreen camera resolution (width, height).
+    high_quality : bool
+        If False (default), the main offscreen camera uses Genesis' fast rasterizer. If
+        True, it uses a Nyx ray-tracing sensor (FastPathTracer) for high-quality frames
+        and videos -- noticeably slower, and requires the optional ``gs-nyx`` /
+        ``gs-nyx-plugin`` packages. The head camera always stays raster regardless.
+    spp : int
+        Samples per pixel for the ray tracer (only used when ``high_quality=True``);
+        higher = cleaner but slower.
 
     Recording is opt-in and decided by the caller: call ``start_recording()`` to begin
     capturing frames, then ``save_video(path)`` (or ``close()``) to write the mp4. If you
     never call ``start_recording()``, no frames are captured and ``save_video()`` is a no-op.
     """
 
-    def __init__(self, headless=None, backend=None, camera_res=(960, 640)):
+    def __init__(self, headless=None, backend=None, camera_res=(960, 640),
+                 high_quality=False, spp=NYX_DEFAULT_SPP):
         if headless is None:
             headless = not os.environ.get("DISPLAY")
         self.headless = headless
         self._recording = False
         self._frame_count = 0
+        self._hq = bool(high_quality)
+        self._spp = int(spp)
+        self._video_path = None  # resolved at start_recording() in high-quality mode
 
         _ensure_gs_init(backend)
 
@@ -322,15 +380,28 @@ class RobotScene:
             show_viewer=not headless,
         )
 
-        # Offscreen camera (always present) -- used for inline frames and optional recording.
-        self.cam = self.scene.add_camera(
-            res=camera_res,
-            pos=(0.0, -7.0, 14.0),
-            lookat=(0.0, 0.0, 0.0),
-            fov=40,
-            GUI=False,
-        )
-
+        # Main offscreen camera (always present) -- used for inline frames and optional
+        # recording. high_quality -> ray-traced Nyx sensor; otherwise the fast rasterizer.
+        # Both share the same top-down pose so render() framing is identical across modes.
+        if self._hq:
+            NyxCameraOptions, npr = _import_nyx()
+            self.cam = self.scene.add_sensor(NyxCameraOptions(
+                res=camera_res,
+                pos=(0.0, -7.0, 14.0),
+                lookat=(0.0, 0.0, 0.0),
+                fov=40,
+                spp=self._spp,
+                render_mode=npr.ERenderMode.FastPathTracer,
+                lights=NYX_LIGHTS,
+            ))
+        else:
+            self.cam = self.scene.add_camera(
+                res=camera_res,
+                pos=(0.0, -7.0, 14.0),
+                lookat=(0.0, 0.0, 0.0),
+                fov=40,
+                GUI=False,
+            )
         # Robot-mounted head camera (pose is bound to the head link after build).
         self.head_cam = self.scene.add_camera(
             res=HEAD_CAM_RES,
@@ -556,7 +627,11 @@ class RobotScene:
             self._apply_joint_targets()
             self.scene.step()
             if self._recording and self._frame_count % RENDER_EVERY == 0:
-                self.cam.render(rgb=True)
+                # In high_quality mode the Nyx main cam renders + records automatically
+                # inside scene.step() (via scene.start_recording); only the raster head
+                # cam needs an explicit per-frame render here.
+                if not self._hq:
+                    self.cam.render(rgb=True)
                 self.head_cam.move_to_attach()  # keep the head cam on the moving link
                 self.head_cam.render(rgb=True)
             self._frame_count += 1
@@ -685,7 +760,14 @@ class RobotScene:
 
     # rendering / video ----------------------------------------------
     def render(self):
-        """Return one RGB frame (H, W, 3 uint8) from the top-down offscreen camera."""
+        """Return one RGB frame (H, W, 3 uint8) from the top-down offscreen camera.
+
+        In high_quality mode this returns the most recent ray-traced frame produced by the
+        last ``scene.step()`` (the Nyx sensor renders while stepping, not on demand), so
+        call ``step()`` first if you need it to reflect a just-applied pose change.
+        """
+        if self._hq:
+            return _to_numpy(self.cam.read().rgb)
         out = self.cam.render()
         rgb = out[0] if isinstance(out, (tuple, list)) else out
         return np.asarray(rgb)
@@ -697,37 +779,57 @@ class RobotScene:
         rgb = out[0] if isinstance(out, (tuple, list)) else out
         return np.asarray(rgb)
 
-    def start_recording(self):
-        """Begin accumulating frames (every RENDER_EVERY-th step) for both cameras.
+    def start_recording(self, path=None):
+        """Begin accumulating frames for both cameras; the output path is fixed here.
 
-        Recording is opt-in: call this to enable it. ``save_video()`` then writes the mp4.
+        Recording is opt-in: call this to enable it. ``path`` is the base mp4 path for this
+        recording (default: a timestamped file under ``videos/``); ``save_video()`` later
+        derives the actual files from it -- a ``*_top.mp4`` (main camera) and a
+        ``*_head.mp4`` (head camera). ``save_video()`` takes no path of its own.
         """
-        if not self._recording:
-            self.cam.start_recording()
-            self.head_cam.start_recording()
-            self._recording = True
-        return self
-
-    def save_video(self, path=None, fps=VIDEO_FPS):
-        """Write the recorded frames and stop recording.
-
-        Two files are written, derived from ``path`` (or a timestamped default):
-        a ``*_top.mp4`` (top-down camera) and a ``*_head.mp4`` (robot head camera).
-        Returns ``(top_path, head_path)``.
-        """
-        if not self._recording:
-            print("[video] nothing recorded (save_video=False / start_recording not called)")
-            return None
+        if self._recording:
+            return self
         if path is None:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             path = os.path.join(VIDEO_DIR, f"scene_robot_tables_{stamp}.mp4")
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        top_path = _with_suffix(path, "_top")
-        head_path = _with_suffix(path, "_head")
-        self.cam.stop_recording(save_to_filename=top_path, fps=fps)
-        self.head_cam.stop_recording(save_to_filename=head_path, fps=fps)
+        self._video_path = path
+        if self._hq:
+            # Main (ray-traced) cam: scene-level recorder, fed by the sensor each step.
+            self.scene.start_recording(
+                data_func=lambda: self.cam.read().rgb,
+                rec_options=gs.recorders.VideoFile(filename=_with_suffix(path, "_top"), fps=VIDEO_FPS),
+            )
+            # Head cam stays raster -> captured by the per-step loop in step().
+            self.head_cam.start_recording()
+        else:
+            self.cam.start_recording()
+            self.head_cam.start_recording()
+        self._recording = True
+        return self
+
+    def save_video(self, fps=VIDEO_FPS):
+        """Write the recorded frames and stop recording.
+
+        Two files are written, derived from the path given to ``start_recording()``:
+        a ``*_top.mp4`` (top-down camera) and a ``*_head.mp4`` (robot head camera).
+        Returns ``(top_path, head_path)``.
+        """
+        if not self._recording:
+            print("[video] nothing recorded (start_recording not called)")
+            return None
+        top_path = _with_suffix(self._video_path, "_top")
+        head_path = _with_suffix(self._video_path, "_head")
+        if self._hq:
+            # Main (ray-traced) video filename was fixed at start_recording(); flush it.
+            self.scene.stop_recording()
+            self.head_cam.stop_recording(save_to_filename=head_path, fps=fps)
+        else:
+            self.cam.stop_recording(save_to_filename=top_path, fps=fps)
+            self.head_cam.stop_recording(save_to_filename=head_path, fps=fps)
         self._recording = False
-        print(f"✓ Saved top-down video to {top_path}")
+        label = "(ray-traced) " if self._hq else ""
+        print(f"✓ Saved top-down {label}video to {top_path}")
         print(f"✓ Saved head-camera video to {head_path}")
         return top_path, head_path
 
@@ -737,12 +839,12 @@ class RobotScene:
             self.save_video()
 
     # convenience demo ------------------------------------------------
-    def demo(self, video_path=None):
+    def demo(self):
         """A short smoke-test: drive a small path and do one IK reach with the left arm.
 
         Used by the CLI; the example notebook is the full usage guide. If the caller
-        started recording (``start_recording()``) beforehand, the run is written to
-        ``video_path`` (or a timestamped default) at the end.
+        started recording (``start_recording(path)``) beforehand, the run is written out
+        (to that path) at the end.
         """
         self.set_base_velocity(LINEAR_SPEED_MPS, 0.0, 0.0, steps=200)     # forward
         self.set_base_velocity(0.0, 0.0, ANGULAR_SPEED_RADPS, steps=120)  # rotate in place
@@ -754,7 +856,7 @@ class RobotScene:
         self.set_arm("left", [ARM_HOLD[n] for n in self.arm_joint_names["left"]])
         self.step(60)
         if self._recording:
-            self.save_video(video_path)
+            self.save_video()
         return self
 
 
@@ -769,6 +871,10 @@ def _parse_args(argv=None):
     p.set_defaults(headless=None)
     p.add_argument("--save-video", action="store_true", help="Record the demo to an mp4.")
     p.add_argument("--video-path", default=None, help="Output mp4 path (default: timestamped).")
+    p.add_argument("--high-quality", action="store_true",
+                   help="Ray-trace the main camera with the Nyx plugin (slower, higher quality).")
+    p.add_argument("--spp", type=int, default=NYX_DEFAULT_SPP,
+                   help="Samples per pixel for ray tracing (only with --high-quality).")
     p.add_argument("--backend", choices=["auto", "cpu", "cuda", "amd", "metal"], default="auto",
                    help="Genesis backend (default: auto-select).")
     return p.parse_args(argv)
@@ -783,14 +889,16 @@ def main(argv=None):
     sim = RobotScene(
         headless=args.headless,
         backend=_resolve_backend(args.backend),
+        high_quality=args.high_quality,
+        spp=args.spp,
     )
     if args.save_video:
-        sim.start_recording()
+        sim.start_recording(args.video_path)
     print("=" * 80)
     print("✓ Scene built (11 tables + 9 letters + 3 cutlery + 1 mobile dual-arm robot)")
     print("  Running the smoke-test demo; see notebooks/robot_scene_demo.ipynb for full usage.")
     print("=" * 80)
-    sim.demo(video_path=args.video_path)
+    sim.demo()
     print("✓ Done!")
 
 

@@ -7,7 +7,7 @@ readme = "README.md"
 requires-python = ">=3.10,<3.13"
 
 dependencies = [
-    "genesis-world==0.4.6",
+    "genesis-world>=1.1.0,<1.2.0",
     "pynput",
     "numpy",
     "ipywidgets",
@@ -22,6 +22,10 @@ dependencies = [
 cpu = ["torch"]
 cu126 = ["torch"]
 rocm = ["torch"]
+# High-quality ray-traced rendering (RobotScene(high_quality=True)). Optional because
+# the default rasterized path needs neither package. Install with: uv sync --extra nyx
+# (or: pip install gs-nyx gs-nyx-plugin). gs-nyx-plugin>=0.1.3 requires genesis-world>=1.1.0.
+nyx = ["gs-nyx>=0.1.2", "gs-nyx-plugin>=0.1.3"]
 
 # CLI entry point: runs the demo (RobotScene + smoke test).
 [project.scripts]

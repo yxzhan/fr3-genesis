@@ -70,9 +70,12 @@ repo works around them:
    you cannot `apt install` ROS 2 (or other system packages). Rely on what the
    course image already provides and install Python dependencies into the base environment.
 
-2. **Pin `genesis-world` to 0.4.6.** Upgrading to `genesis-world` 1.0.0 crashes
-   the Jupyter kernel on this platform. The dependency is pinned to `==0.4.6` in
-   `pyproject.toml`.
+2. **`genesis-world` is now `>=1.1.0,<1.2.0`.** It was previously pinned to
+   `==0.4.6` because `genesis-world` 1.0.0 crashed the Jupyter kernel on this
+   platform. The bump to 1.1.0 is required by the optional `nyx` extra
+   (`gs-nyx-plugin>=0.1.3` needs `genesis-world>=1.1.0`). ⚠️ Re-verify on AUPLC
+   AMD: the 1.0.0 kernel crash was never confirmed fixed in 1.1.0, so test a
+   headless build before relying on it here.
 
 3. **CoACD convex decomposition crashes the kernel on AMD.** The first time the
    scene is built, Genesis runs CoACD convex decomposition on the collision
@@ -82,7 +85,10 @@ repo works around them:
    `~/.cache/genesis` from it (`_restore_genesis_cache` in
    `scripts/scene_robot_tables.py`) so Genesis never decomposes anything at
    runtime. Keep the bundled cache in sync with the pinned Genesis version — the
-   cache key includes `gs.__version__`.
+   cache key includes `gs.__version__`. ⚠️ The 0.4.6 → 1.1.0 bump changes this
+   key, so the bundled `assets/genesis_cache` is now stale; regenerate it on a
+   CUDA machine with Genesis 1.1.0 (otherwise AMD falls back to the crashing
+   runtime decomposition).
 
 4. **Base driving jitters violently → use 64-bit precision.** When driving the
    FR3 mobile base, the robot shakes badly on AMD, almost certainly due to
