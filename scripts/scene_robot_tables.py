@@ -658,8 +658,15 @@ class RobotScene:
 
     # base ------------------------------------------------------------
     def set_base_velocity(self, vx, vy, wz, steps=1):
-        """Set the body-frame base velocity (vx fwd, vy left, wz yaw) and advance ``steps`` steps."""
-        self._twist = (float(vx), float(vy), float(wz))
+        """Set the body-frame base velocity (vx fwd, vy left, wz yaw) and advance ``steps``.
+
+        Each of vx/vy/wz may be a scalar (same for all envs) or a length-N array.
+        """
+        self._twist = np.stack([
+            np.broadcast_to(np.asarray(vx, dtype=float), (self.n_envs,)),
+            np.broadcast_to(np.asarray(vy, dtype=float), (self.n_envs,)),
+            np.broadcast_to(np.asarray(wz, dtype=float), (self.n_envs,)),
+        ], axis=1)
         return self.step(steps)
 
     def stop_base(self, steps=1):
@@ -673,104 +680,129 @@ class RobotScene:
         to let them arrive) -- useful to undo earlier joint/IK moves before a new task.
         """
         for s in ("left", "right"):
-            self._arm_target[s] = np.array([ARM_HOLD[n] for n in self.arm_joint_names[s]])
-            self._finger_target[s] = np.full(2, GRIPPER_OPEN)
+            self._arm_target[s] = np.tile(
+                np.array([ARM_HOLD[n] for n in self.arm_joint_names[s]]), (self.n_envs, 1))
+            self._finger_target[s] = np.full((self.n_envs, 2), GRIPPER_OPEN)
         self.step(settle)
         return self
 
     def teleport_base(self, x, y, yaw=None, settle=100):
         """Instantly move the base to world ``(x, y)`` (z kept) with optional ``yaw`` (rad).
 
-        Unlike ``set_base_velocity`` this does not drive the wheels -- it snaps the free
-        base to the new pose, zeroes the commanded twist, then steps ``settle`` times so
-        the arms re-settle and the heading-hold reference is re-anchored.
+        x / y / yaw may be scalars (all envs) or length-N arrays. Unlike
+        ``set_base_velocity`` this does not drive the wheels -- it snaps the free base to
+        the new pose, zeroes the commanded twist, then steps ``settle`` times so the arms
+        re-settle and the heading-hold reference is re-anchored.
         """
-        pos = self.get_pos()
-        pos[0], pos[1] = float(x), float(y)
-        self.robot.set_pos(pos)
+        pos = self._read(self.robot.get_pos())                    # [N, 3]
+        pos[:, 0] = np.broadcast_to(np.asarray(x, dtype=float), (self.n_envs,))
+        pos[:, 1] = np.broadcast_to(np.asarray(y, dtype=float), (self.n_envs,))
+        self.robot.set_pos(self._emit(pos))
         if yaw is not None:
-            half = 0.5 * float(yaw)
-            self.robot.set_quat(np.array([math.cos(half), 0.0, 0.0, math.sin(half)]))
-        self._twist = (0.0, 0.0, 0.0)
+            half = 0.5 * np.broadcast_to(np.asarray(yaw, dtype=float), (self.n_envs,))
+            quat = np.stack([np.cos(half), np.zeros(self.n_envs),
+                             np.zeros(self.n_envs), np.sin(half)], axis=1)  # [N, 4]
+            self.robot.set_quat(self._emit(quat))
+        self._twist = np.zeros((self.n_envs, 3))
         self.step(settle)
-        self._heading_hold_yaw = self.get_yaw()
+        self._heading_hold_yaw = self._yaw_all()
         return self
 
     def get_pos(self):
-        return self.robot.get_pos().cpu().numpy()
+        p = self._read(self.robot.get_pos())                      # [N, 3]
+        return p if self.batched else p[0]
 
     def get_yaw(self):
-        q = self.robot.get_quat()
-        w, x, y, z = (float(q[0]), float(q[1]), float(q[2]), float(q[3]))
-        return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+        y = self._yaw_all()                                       # [N]
+        return y if self.batched else float(y[0])
 
     def get_yaw_rate(self):
-        return float(self.robot.get_ang()[2])
+        r = self._yaw_rate_all()                                  # [N]
+        return r if self.batched else float(r[0])
 
     def get_base_pose(self):
-        """Return ((x, y, z), yaw) of the robot base."""
+        """Return ((x, y, z), yaw). Batched: ([N,3], [N]); else ([3], float)."""
         return self.get_pos(), self.get_yaw()
 
     # joints ----------------------------------------------------------
     def set_arm(self, side, q, step=False, steps=1):
-        """Set the 7 arm joint position targets for ``side`` ('left'/'right')."""
-        self._arm_target[side] = np.asarray(q, dtype=float).reshape(7)
+        """Set the 7 arm joint targets for ``side``. ``q`` is [7] (all envs) or [N, 7]."""
+        self._arm_target[side] = self._broadcast(q, 7)
         if step:
             self.step(steps)
         return self
 
     def get_arm(self, side):
-        return self.robot.get_dofs_position(self.arm_dofs[side]).cpu().numpy()
+        q = self._read_dofs(self.arm_dofs[side])                  # [N, 7]
+        return q if self.batched else q[0]
 
     def set_gripper(self, side, opening, step=False, steps=1):
-        """Set gripper opening (meters per finger, 0=closed .. 0.04=open) for ``side``."""
-        self._finger_target[side] = np.full(2, float(opening))
+        """Set gripper opening (m/finger). ``opening`` is a scalar (all envs) or [N]."""
+        a = np.asarray(opening, dtype=float)
+        if a.ndim == 0:
+            self._finger_target[side] = np.full((self.n_envs, 2), float(a))
+        else:
+            self._finger_target[side] = np.repeat(a.reshape(self.n_envs, 1), 2, axis=1)
         if step:
             self.step(steps)
         return self
 
     def set_spine(self, height, step=False, steps=1):
-        """Set the vertical spine lift height (meters), clamped to [0.0, 0.85]."""
-        self._spine_target = max(SPINE_LOWER, min(SPINE_UPPER, float(height)))
+        """Set the spine lift height (m), clamped to [0, 0.85]. Scalar or [N]."""
+        h = np.clip(np.asarray(height, dtype=float), SPINE_LOWER, SPINE_UPPER)
+        self._spine_target = np.broadcast_to(h, (self.n_envs,)).astype(float).copy()
         if step:
             self.step(steps)
         return self
 
     def get_spine(self):
-        """Current vertical spine lift height (meters)."""
-        return float(self.robot.get_dofs_position([self.spine_dof]).cpu().numpy()[0])
+        """Current spine lift height (m). Batched: [N]; else float."""
+        v = self._read_dofs([self.spine_dof])[:, 0]               # [N]
+        return v if self.batched else float(v[0])
 
     # IK --------------------------------------------------------------
     def _tcp_of(self, side):
-        """Current finger-TCP position of ``side`` (link7 origin minus the tool offset)."""
-        link7 = self.ee_link[side].get_pos().cpu().numpy()
-        return link7 - np.array([0.0, 0.0, TCP_OFFSET])
+        """Current finger-TCP position of ``side`` (link7 origin minus tool offset).
+
+        Batched returns [N, 3]; non-batched returns [3]."""
+        link7 = self._read(self.ee_link[side].get_pos())          # [N, 3]
+        tcp = link7 - np.array([0.0, 0.0, TCP_OFFSET])
+        return tcp if self.batched else tcp[0]
 
     def get_ee_pos(self, side):
-        """Current finger tool-center-point (x, y, z) of the ``side`` arm."""
+        """Current finger TCP (x, y, z) of the ``side`` arm. [N,3] batched else [3]."""
         return self._tcp_of(side)
 
     def ik(self, side, pos, quat=DOWN_QUAT):
-        """Return the 7 arm joint angles placing ``side`` finger TCP at ``pos`` with ``quat``.
+        """Arm joint angles placing ``side`` finger TCP at ``pos`` with ``quat``.
 
-        ``pos`` is the finger tool-center-point; it is offset up to the link7 frame that
-        Genesis actually exposes (assumes a roughly gripper-down orientation).
+        Batched: ``pos`` is [N, 3], ``quat`` [4] or [N, 4]; returns [N, 7].
+        Non-batched: ``pos`` is [3]; returns [7].
         """
-        target = np.asarray(pos, dtype=float) + np.array([0.0, 0.0, TCP_OFFSET])
+        offset = np.array([0.0, 0.0, TCP_OFFSET])
+        if self.batched:
+            target = np.broadcast_to(np.asarray(pos, dtype=float), (self.n_envs, 3)) + offset
+            q = np.broadcast_to(np.asarray(quat, dtype=float), (self.n_envs, 4))
+            q_full = self.robot.inverse_kinematics(
+                link=self.ee_link[side], pos=target, quat=q, dofs_idx_local=self.arm_dofs[side])
+            return q_full[:, self.arm_qs[side]].cpu().numpy()     # [N, 7]
+        target = np.asarray(pos, dtype=float) + offset
         q_full = self.robot.inverse_kinematics(
-            link=self.ee_link[side],
-            pos=target,
-            quat=np.asarray(quat, dtype=float),
-            dofs_idx_local=self.arm_dofs[side],
-        )
-        # q_full is qpos-indexed; read the arm's qpos slots (offset from dof indices
-        # by the free base). The values are joint angles, usable as dof position targets.
-        return q_full[self.arm_qs[side]].cpu().numpy()
+            link=self.ee_link[side], pos=target, quat=np.asarray(quat, dtype=float),
+            dofs_idx_local=self.arm_dofs[side])
+        return q_full[self.arm_qs[side]].cpu().numpy()            # [7]
 
     def move_ee(self, side, pos, quat=DOWN_QUAT, n_waypoints=60, settle=2):
-        """Move ``side`` finger TCP to ``pos`` along an interpolated straight line of way-points."""
-        start = self._tcp_of(side)
-        target = np.asarray(pos, dtype=float)
+        """Move ``side`` finger TCP to ``pos`` along an interpolated straight line.
+
+        ``pos`` is [3] (all envs) or [N, 3]; each env follows its own start->target line.
+        """
+        start = self._tcp_of(side)                                # [3] or [N, 3]
+        if self.batched:
+            start = np.atleast_2d(start)                          # [N, 3]
+            target = np.broadcast_to(np.asarray(pos, dtype=float), (self.n_envs, 3))
+        else:
+            target = np.asarray(pos, dtype=float)
         for i in range(1, n_waypoints + 1):
             p = start + (target - start) * i / n_waypoints
             self.set_arm(side, self.ik(side, p, quat))
