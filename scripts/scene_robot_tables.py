@@ -217,8 +217,10 @@ def _ensure_gs_init(backend):
     _restore_genesis_cache()
     if backend is None:
         backend = select_backend()
-    print(f"[backend] using: {getattr(backend, 'name', backend)}")
-    gs.init(backend=backend, theme="light")
+    # ROCm/HIP needs 64-bit precision to stay numerically stable; others use 32-bit.
+    precision = "64" if backend is gs.amdgpu else "32"
+    print(f"[backend] using: {getattr(backend, 'name', backend)} (precision={precision})")
+    gs.init(backend=backend, theme="light", precision=precision)
     gs.logger._logger.setLevel(logging.WARNING)
     _GS_INITIALIZED = True
 
