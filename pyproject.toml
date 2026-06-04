@@ -52,7 +52,7 @@ packages = ["fr3_genesis"]
 # pruning it — installing it out-of-band with `uv pip install` does not survive a
 # later `uv sync`.
 [dependency-groups]
-dev = ["ipykernel"]
+dev = ["ipykernel", "pytest"]
 
 [tool.uv]
 # Pick one of cpu / cu126 / rocm; installing more than one is disallowed.
