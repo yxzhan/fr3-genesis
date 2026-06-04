@@ -227,15 +227,19 @@ def _ensure_gs_init(backend):
 
 ########################## small numpy kinematics helpers ##########################
 def _wrap_to_pi(a):
-    return math.atan2(math.sin(a), math.cos(a))
+    """Wrap angle(s) to (-pi, pi]. Accepts a scalar or a numpy array."""
+    return np.arctan2(np.sin(a), np.cos(a))
 
 
 def _steering_alignment_scale(error):
-    """Fade wheel speed down while the steering is not yet aligned, to avoid side-slip."""
+    """Fade wheel speed down while the steering is not yet aligned, to avoid side-slip.
+
+    Accepts a scalar or a numpy array; returns the same shape, clamped to [0, 1].
+    """
     scale = (STEERING_ZERO_SPEED_ERROR_RAD - error) / (
         STEERING_ZERO_SPEED_ERROR_RAD - STEERING_FULL_SPEED_ERROR_RAD
     )
-    return max(0.0, min(1.0, scale))
+    return np.clip(scale, 0.0, 1.0)
 
 
 def compute_drive_targets(cur_steer_angles, vx, vy, wz):
