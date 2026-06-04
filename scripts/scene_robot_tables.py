@@ -114,12 +114,12 @@ DOWN_QUAT = _quat_mul(_DOWN, _RZ)  # gripper down, fingers aligned to world axes
 # offset down to the finger TCP 
 TCP_OFFSET = 0.166
 
-RENDER_EVERY = 4   # record every 4th sim step -> ~50 fps at dt=0.005 (≈ real time)
-VIDEO_FPS = 50
+RENDER_EVERY = 8   # record every 4th sim step -> ~50 fps at dt=0.005 (≈ real time)
+VIDEO_FPS = 25
 
 # Robot-mounted head camera (attached to the URDF's head_camera_mounting_point link).
 HEAD_CAM_LINK = "head_camera_mounting_point"
-HEAD_CAM_RES = (640, 480)
+HEAD_CAM_RES = (960, 640)
 HEAD_CAM_FOV = 90
 # Camera pose relative to the mount link. The link's local +X already points forward and
 # ~41° down (the mount joint is pitched about Y), and Genesis cameras look down their local
