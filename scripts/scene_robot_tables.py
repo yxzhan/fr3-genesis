@@ -863,24 +863,31 @@ class RobotScene:
             self.save_video()
 
     # convenience demo ------------------------------------------------
-    def demo(self, video_path=None):
-        """A short smoke-test: drive a small path and do one IK reach with the left arm.
+    def demo(self):
+        """Short smoke demo. Single-env: drive a path + one IK reach. Batched:
+        give each env a different rotation speed so the parallelism is visible.
 
-        Used by the CLI; the example notebook is the full usage guide. If the caller
-        started recording (``start_recording()``) beforehand, the run is written to
-        ``video_path`` (or a timestamped default) at the end.
+        If the scene was constructed with ``save_video=True``, the run is recorded and
+        written to ``video_path`` (or a timestamped default) at the end.
         """
-        self.set_base_velocity(LINEAR_SPEED_MPS, 0.0, 0.0, steps=200)     # forward
-        self.set_base_velocity(0.0, 0.0, ANGULAR_SPEED_RADPS, steps=120)  # rotate in place
-        self.set_base_velocity(0.0, LINEAR_SPEED_MPS, 0.0, steps=120)     # strafe left
-        self.stop_base(steps=40)
-        # one IK reach in front of the left arm, then back to the tuck pose
-        pos, _ = self.get_base_pose()
-        self.move_ee("left", (pos[0] + 0.45, pos[1] + 0.3, 0.95), n_waypoints=40)
-        self.set_arm("left", [ARM_HOLD[n] for n in self.arm_joint_names["left"]])
-        self.step(60)
-        if self._recording:
-            self.save_video(video_path)
+        if self._record:
+            self.start_recording()
+        if self.batched:
+            wz = np.linspace(-ANGULAR_SPEED_RADPS, ANGULAR_SPEED_RADPS, self.n_envs)
+            self.set_base_velocity(LINEAR_SPEED_MPS, 0.0, 0.0, steps=150)  # all forward
+            self.set_base_velocity(0.0, 0.0, wz, steps=150)                # per-env spin
+            self.stop_base(steps=40)
+        else:
+            self.set_base_velocity(LINEAR_SPEED_MPS, 0.0, 0.0, steps=200)
+            self.set_base_velocity(0.0, 0.0, ANGULAR_SPEED_RADPS, steps=120)
+            self.set_base_velocity(0.0, LINEAR_SPEED_MPS, 0.0, steps=120)
+            self.stop_base(steps=40)
+            pos, _ = self.get_base_pose()
+            self.move_ee("left", (pos[0] + 0.45, pos[1] + 0.3, 0.95), n_waypoints=40)
+            self.set_arm("left", [ARM_HOLD[n] for n in self.arm_joint_names["left"]])
+            self.step(60)
+        if self._record:
+            self.save_video(self.video_path)
         return self
 
 
@@ -897,6 +904,8 @@ def _parse_args(argv=None):
     p.add_argument("--video-path", default=None, help="Output mp4 path (default: timestamped).")
     p.add_argument("--backend", choices=["auto", "cpu", "cuda", "amd", "metal"], default="auto",
                    help="Genesis backend (default: auto-select).")
+    p.add_argument("--n-envs", type=int, default=1,
+                   help="Number of parallel environments (default: 1 = scalar mode).")
     return p.parse_args(argv)
 
 
@@ -908,15 +917,16 @@ def main(argv=None):
     args = _parse_args(argv)
     sim = RobotScene(
         headless=args.headless,
+        save_video=args.save_video,
+        video_path=args.video_path,
         backend=_resolve_backend(args.backend),
+        n_envs=args.n_envs,
     )
-    if args.save_video:
-        sim.start_recording()
     print("=" * 80)
     print("✓ Scene built (11 tables + 9 letters + 3 cutlery + 1 mobile dual-arm robot)")
     print("  Running the smoke-test demo; see notebooks/robot_scene_demo.ipynb for full usage.")
     print("=" * 80)
-    sim.demo(video_path=args.video_path)
+    sim.demo()
     print("✓ Done!")
 
 
