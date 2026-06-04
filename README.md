@@ -13,12 +13,9 @@ Scripts under `scripts/`:
 - `scene_robot_keyboard.py` — full scene + keyboard teleop of the mobile base
   (arrow keys to translate, `,` / `.` to rotate); records a scripted video when headless.
 
-A worked example of the `RobotScene` API lives in `notebooks/robot_scene_demo.ipynb`.
-
 ## Installation
 
-Dependencies: `genesis-world`, `pynput`, `numpy`, plus **one PyTorch variant
-chosen for your hardware** (CPU / NVIDIA CUDA / AMD ROCm). This project uses
+This project uses
 [uv](https://docs.astral.sh/uv/) to manage the virtual environment and
 dependencies.
 
@@ -33,12 +30,13 @@ Or see the official docs: https://docs.astral.sh/uv/getting-started/installation
 
 ### 2. Create the virtual environment and install dependencies
 
+Dependencies: `genesis-world` plus **one PyTorch variant
+chosen for your hardware** (CPU / NVIDIA CUDA / AMD ROCm).
+
 `uv` creates the virtual environment at `./.venv` in the repo root. **Pick one
 extra for your hardware:**
 
 ```bash
-uv venv                      # create the virtual environment at ./.venv
-
 # —— choose one ——
 uv sync --extra cpu          # no GPU / CI: CPU build of PyTorch
 uv sync --extra cu126        # NVIDIA GPU: CUDA 12.6 build of PyTorch
@@ -51,7 +49,9 @@ uv sync --extra rocm         # AMD GPU (Linux only): ROCm 7.2 build of PyTorch
   the `pytorch-cu126` index URL in `pyproject.toml` accordingly (e.g. `whl/cu128`).
 - ROCm is Linux-only.
 
-### 3. Run
+### 3. Usage
+
+See [notebooks/robot_scene_tables.ipynb](notebooks/robot_scene_tables.ipynb).
 
 ```bash
 # reusable scene library — runs a short demo; --save-video writes a top-down + head-camera mp4
@@ -60,9 +60,6 @@ uv run python scripts/scene_robot_tables.py --headless --save-video
 # keyboard teleop (needs a display; falls back to a scripted video when headless)
 uv run python scripts/scene_robot_keyboard.py
 ```
-
-> Note: both scripts auto-select the Genesis backend (CUDA → ROCm → Metal → CPU)
-> based on your hardware, so no manual backend edit is needed.
 
 ## Install as a package (`fr3_genesis`)
 
