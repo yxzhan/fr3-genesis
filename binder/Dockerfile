@@ -35,25 +35,17 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 # Install UV
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# ---- Dependency layer -------------------------------------------------------
-# Copy ONLY the dependency manifests first. Editing scripts/ or notebooks/ does
-# not touch these files, so this expensive layer (torch, genesis-world, ...)
-# stays cached. UV_EXTRA selects the PyTorch build: cpu | cu126 | rocm.
-ARG UV_EXTRA=cpu
+# ---- Dependency layer (cached unless pyproject.toml changes) -----------------
+# Copy ONLY the manifest first so editing scripts/ or notebooks/ does not
+# invalidate this expensive layer (torch, genesis-world, ...). Installs the
+# project's deps + the selected extra, but not the local package itself.
 COPY pyproject.toml ${REPO_DIR}/
-# Installs third-party deps + the "dev" group (ipykernel); --no-install-project
-# skips the local package so this layer stays cached across source edits.
-RUN uv sync --extra ${UV_EXTRA} --no-install-project
+RUN uv pip install --python "$(which python)" --extra cpu -r pyproject.toml
 
-# ---- Project layer ----------------------------------------------------------
-# Now copy the full source. This layer is rebuilt whenever any file changes, but
-# the step below only (re)installs the local fr3-genesis package — the heavy
-# third-party deps above remain cached and are not reinstalled.
+# ---- Project layer (re-runs on source change; only re-installs fr3_genesis) --
 COPY . ${REPO_DIR}/
 RUN git config --global --add safe.directory ${REPO_DIR}
-RUN uv sync --extra ${UV_EXTRA} && \
-    uv run python -m ipykernel install --user \
-        --name genesis --display-name "Genesis"
+RUN uv pip install --python "$(which python)" --no-deps .
 
 # Set JupyterLab default directory
 WORKDIR ${REPO_DIR}

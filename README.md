@@ -13,6 +13,54 @@ Scripts under `scripts/`:
 - `scene_robot_keyboard.py` — full scene + keyboard teleop of the mobile base
   (arrow keys to translate, `,` / `.` to rotate); records a scripted video when headless.
 
+## Quick Start
+
+Run the demo notebook on a
+cloud platform — pick the one matching your GPU backend below.
+
+### AMD GPU — AUP Learning Cloud (AUPLC)
+
+Sign in: https://www.openhw.io/hub/
+
+1. Start the **"Genesis Physical Simulation Course"** server.
+2. Open a **Terminal**.
+3. Expose your persistent home directory in the file browser:
+   ```bash
+   ln -s ~
+   ```
+   `/home/jovyan` (`~`) is the only directory that persists across server
+   restarts, but JupyterLab does not show it by default. This command creates a
+   `jovyan` symlink in the current working directory so you can browse it. The
+   symlink itself is not persistent — **re-run it each time you start the server.**
+4. Clone this repository into your home directory so your work survives restarts:
+   ```bash
+   git clone https://github.com/yxzhan/fr3-genesis.git ~/fr3-genesis
+   ```
+5. Open and run [`notebooks/robot_scene_tables.ipynb`](notebooks/robot_scene_tables.ipynb).
+
+> Headless only — no display, so keep `HEADLESS = True` in the notebook.
+
+### CPU — AICOR Virtual Research Building
+
+https://binder.intel4coro.de/v2/gh/yxzhan/fr3-genesis/main?urlpath=lab/tree/notebooks/robot_scene_tables.ipynb
+
+> Supports the interactive Genesis viewer (set `HEADLESS = False` in the
+> notebook), but runs on CPU so it is noticeably slower. Before running in
+> non-headless mode, open the **"Desktop"** tab first so the virtual display is
+> initialized.
+
+### NVIDIA GPU — Google Colab
+
+https://colab.research.google.com/github/yxzhan/fr3-genesis/blob/main/notebooks/robot_scene_tables.ipynb
+
+1. Set the runtime to GPU: **Runtime → Change runtime type → GPU**.
+2. Run the first (setup) cell. When dependency installation finishes, Colab
+   prompts you to **restart the kernel** — do so, then run the notebook from the
+   top.
+
+> Headless only — no display, so keep `HEADLESS = True` in the notebook.
+
+
 ## Installation
 
 This project uses
