@@ -95,3 +95,19 @@ def test_compute_drive_targets_batched_matches_scalar_reference():
         ref_steer, ref_drive = _ref_scalar_drive_targets(cur[i], tvx, tvy, twz)
         assert np.allclose(steer[i], ref_steer, atol=1e-9), f"steer env {i}"
         assert np.allclose(drive[i], ref_drive, atol=1e-9), f"drive env {i}"
+
+
+def test_quat_to_yaw_scalar_and_batched():
+    # Identity quat -> yaw 0. 90 deg about z -> yaw pi/2. Quats are (w, x, y, z).
+    import math
+    q_id = np.array([1.0, 0.0, 0.0, 0.0])
+    half = 0.5 * (math.pi / 2)
+    q_90 = np.array([math.cos(half), 0.0, 0.0, math.sin(half)])
+
+    assert np.isclose(s.quat_to_yaw(q_id), 0.0)
+    assert np.isclose(s.quat_to_yaw(q_90), math.pi / 2)
+
+    batched = np.stack([q_id, q_90])
+    out = s.quat_to_yaw(batched)
+    assert out.shape == (2,)
+    assert np.allclose(out, [0.0, math.pi / 2])

@@ -242,6 +242,13 @@ def _steering_alignment_scale(error):
     return np.clip(scale, 0.0, 1.0)
 
 
+def quat_to_yaw(quat):
+    """Yaw (rad) about world z from a (w, x, y, z) quaternion. Accepts [4] or [B, 4]."""
+    q = np.asarray(quat, dtype=float)
+    w, x, y, z = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+    return np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
 # Module geometry, cached as [M] arrays for the vectorized drive solver.
 _MODULE_X = np.array([m[2] for m in DRIVE_MODULES], dtype=float)
 _MODULE_Y = np.array([m[3] for m in DRIVE_MODULES], dtype=float)
