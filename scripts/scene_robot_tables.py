@@ -7,7 +7,7 @@ it is now a small library exposing a single ``RobotScene`` class that can be eit
   * imported into a notebook / another script::
 
         from scene_robot_tables import RobotScene
-        sim = RobotScene(headless=True, save_video=False)
+        sim = RobotScene(headless=True)
         sim.set_base_velocity(0.5, 0.0, 0.0, steps=200)   # drive the base forward
         sim.move_ee("left", (0.4, 4.9, 0.9))         # IK-move the left end-effector
         frame = sim.render()                         # grab an RGB frame
@@ -19,12 +19,12 @@ it is now a small library exposing a single ``RobotScene`` class that can be eit
 Importing this module has **no side effects** (it does not call ``gs.init`` or build a
 scene); all Genesis setup happens inside ``RobotScene.__init__``.
 
-``headless`` and ``save_video`` are independent:
-  * ``headless`` only controls whether the interactive viewer window opens. When ``None``
-    it is auto-detected from the ``DISPLAY`` env var (empty/unset -> headless).
-  * ``save_video`` only controls whether the offscreen camera records an mp4. An offscreen
-    camera is always created, so ``render()`` (single-frame, for inline notebook display)
-    works regardless of ``save_video``.
+``headless`` controls only whether the interactive viewer window opens. When ``None`` it
+is auto-detected from the ``DISPLAY`` env var (empty/unset -> headless).
+
+Recording is opt-in and independent of ``headless``: an offscreen camera is always created
+(so ``render()`` for inline notebook frames works regardless), but mp4 capture happens only
+if the caller calls ``start_recording()`` (then ``save_video(path)`` to write it).
 
 Coordinate / quaternion convention: Genesis is Z-up, meters, quaternion w-x-y-z.
 """
@@ -114,8 +114,8 @@ DOWN_QUAT = _quat_mul(_DOWN, _RZ)  # gripper down, fingers aligned to world axes
 # offset down to the finger TCP 
 TCP_OFFSET = 0.166
 
-RENDER_EVERY = 8   # record every 4th sim step -> ~50 fps at dt=0.005 (≈ real time)
-VIDEO_FPS = 25
+RENDER_EVERY = 4   # record every 4th sim step -> ~50 fps at dt=0.005 (≈ real time)
+VIDEO_FPS = 50
 
 # Robot-mounted head camera (attached to the URDF's head_camera_mounting_point link).
 HEAD_CAM_LINK = "head_camera_mounting_point"
@@ -290,26 +290,22 @@ class RobotScene:
     headless : bool | None
         If True, no interactive viewer opens. If None (default), auto-detected from the
         DISPLAY env var. Controls only the viewer; an offscreen render camera always exists.
-    save_video : bool
-        If True, every step loop records frames; call ``save_video()`` (or ``close()``) to
-        write the mp4. Independent of ``headless``.
-    video_path : str | None
-        Output mp4 path; defaults to a timestamped file under ``scripts/videos/``.
     backend : genesis backend | None
         e.g. ``gs.cpu``. None -> auto (``select_backend``), which honors the
         ``FR3_BACKEND`` env var (cpu/cuda/amd/metal) to force a backend before
         falling back to auto-detection. An explicit value here overrides both.
     camera_res : (int, int)
         Offscreen camera resolution (width, height).
+
+    Recording is opt-in and decided by the caller: call ``start_recording()`` to begin
+    capturing frames, then ``save_video(path)`` (or ``close()``) to write the mp4. If you
+    never call ``start_recording()``, no frames are captured and ``save_video()`` is a no-op.
     """
 
-    def __init__(self, headless=None, save_video=False, video_path=None,
-                 backend=None, camera_res=(960, 640)):
+    def __init__(self, headless=None, backend=None, camera_res=(960, 640)):
         if headless is None:
             headless = not os.environ.get("DISPLAY")
         self.headless = headless
-        self._record = bool(save_video)
-        self.video_path = video_path
         self._recording = False
         self._frame_count = 0
 
@@ -702,7 +698,10 @@ class RobotScene:
         return np.asarray(rgb)
 
     def start_recording(self):
-        """Begin accumulating frames (every RENDER_EVERY-th step) for both cameras."""
+        """Begin accumulating frames (every RENDER_EVERY-th step) for both cameras.
+
+        Recording is opt-in: call this to enable it. ``save_video()`` then writes the mp4.
+        """
         if not self._recording:
             self.cam.start_recording()
             self.head_cam.start_recording()
@@ -719,8 +718,6 @@ class RobotScene:
         if not self._recording:
             print("[video] nothing recorded (save_video=False / start_recording not called)")
             return None
-        if path is None:
-            path = self.video_path
         if path is None:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             path = os.path.join(VIDEO_DIR, f"scene_robot_tables_{stamp}.mp4")
@@ -740,13 +737,13 @@ class RobotScene:
             self.save_video()
 
     # convenience demo ------------------------------------------------
-    def demo(self):
+    def demo(self, video_path=None):
         """A short smoke-test: drive a small path and do one IK reach with the left arm.
 
-        Used by the CLI; the example notebook is the full usage guide.
+        Used by the CLI; the example notebook is the full usage guide. If the caller
+        started recording (``start_recording()``) beforehand, the run is written to
+        ``video_path`` (or a timestamped default) at the end.
         """
-        if self._record:
-            self.start_recording()
         self.set_base_velocity(LINEAR_SPEED_MPS, 0.0, 0.0, steps=200)     # forward
         self.set_base_velocity(0.0, 0.0, ANGULAR_SPEED_RADPS, steps=120)  # rotate in place
         self.set_base_velocity(0.0, LINEAR_SPEED_MPS, 0.0, steps=120)     # strafe left
@@ -756,8 +753,8 @@ class RobotScene:
         self.move_ee("left", (pos[0] + 0.45, pos[1] + 0.3, 0.95), n_waypoints=40)
         self.set_arm("left", [ARM_HOLD[n] for n in self.arm_joint_names["left"]])
         self.step(60)
-        if self._record:
-            self.save_video()
+        if self._recording:
+            self.save_video(video_path)
         return self
 
 
@@ -785,15 +782,15 @@ def main(argv=None):
     args = _parse_args(argv)
     sim = RobotScene(
         headless=args.headless,
-        save_video=args.save_video,
-        video_path=args.video_path,
         backend=_resolve_backend(args.backend),
     )
+    if args.save_video:
+        sim.start_recording()
     print("=" * 80)
     print("✓ Scene built (11 tables + 9 letters + 3 cutlery + 1 mobile dual-arm robot)")
     print("  Running the smoke-test demo; see notebooks/robot_scene_demo.ipynb for full usage.")
     print("=" * 80)
-    sim.demo()
+    sim.demo(video_path=args.video_path)
     print("✓ Done!")
 
 

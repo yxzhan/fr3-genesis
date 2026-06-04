@@ -61,6 +61,37 @@ https://colab.research.google.com/github/yxzhan/fr3-genesis/blob/main/notebooks/
 > Headless only — no display, so keep `HEADLESS = True` in the notebook.
 
 
+## Known issues on AUPLC (AMD GPU)
+
+Gotchas specific to the AUP Learning Cloud / AMD ROCm environment, and how this
+repo works around them:
+
+1. **No `sudo` in the container.** The single-user container is unprivileged, so
+   you cannot `apt install` ROS 2 (or other system packages). Rely on what the
+   course image already provides and install Python dependencies into the base environment.
+
+2. **Pin `genesis-world` to 0.4.6.** Upgrading to `genesis-world` 1.0.0 crashes
+   the Jupyter kernel on this platform. The dependency is pinned to `==0.4.6` in
+   `pyproject.toml`.
+
+3. **CoACD convex decomposition crashes the kernel on AMD.** The first time the
+   scene is built, Genesis runs CoACD convex decomposition on the collision
+   meshes, and that call crashes the kernel under the ROCm/AMD backend. As a
+   workaround the decomposition is precomputed on a CUDA machine and the result
+   is bundled in `assets/genesis_cache`; on startup `RobotScene` seeds
+   `~/.cache/genesis` from it (`_restore_genesis_cache` in
+   `scripts/scene_robot_tables.py`) so Genesis never decomposes anything at
+   runtime. Keep the bundled cache in sync with the pinned Genesis version — the
+   cache key includes `gs.__version__`.
+
+4. **Base driving jitters violently → use 64-bit precision.** When driving the
+   FR3 mobile base, the robot shakes badly on AMD, almost certainly due to
+   floating-point/solver numerical differences in the backend. It is fixed by
+   initializing Genesis with 64-bit precision on the AMD backend (`precision="64"`
+   when `backend is gs.amdgpu`; see `_ensure_gs_init` in
+   `scripts/scene_robot_tables.py`). Other backends keep 32-bit.
+
+
 ## Installation
 
 This project uses
