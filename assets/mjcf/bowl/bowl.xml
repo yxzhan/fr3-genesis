@@ -18,7 +18,8 @@
     <body name="imagetostl_mesh_0_010" pos="0.000000 0.000000 0.000000" quat="0.707107 0.707107 0.000000 0.000000">
       <freejoint/>
       <geom type="mesh" mesh="ImagetostlMesh0010" class="visual" material="M_mat0_011"/>
-      <geom name="imagetostl_mesh_0010_aabb" type="box" pos="-0.0000 0.0431 -0.0000" size="0.0390 0.0430 0.0390" class="collision"/>
+      <!-- <geom name="imagetostl_mesh_0010_aabb" type="box" pos="-0.0000 0.0431 -0.0000" size="0.0390 0.0430 0.0390" class="collision"/> -->
+      <geom type="mesh" mesh="ImagetostlMesh0010" class="collision" />
     </body>
   </worldbody>
 </mujoco>

@@ -33,6 +33,7 @@ import argparse
 import logging
 import math
 import os
+import shutil
 import warnings
 from datetime import datetime
 
@@ -131,6 +132,29 @@ MJCF_DIR = os.path.join(ASSETS_DIR, "mjcf")
 URDF_PATH = os.path.join(ASSETS_DIR, "urdf", "mobile_fr3_duo_v0_2_franka_hand.urdf")
 VIDEO_DIR = os.path.join(SCRIPT_DIR, "videos")
 
+# Genesis convex-decomposition cache. The first build of this scene runs (slow) convex
+# decomposition on every collision mesh and writes the result to ~/.cache/genesis. We
+# ship a pre-computed copy under assets/genesis_cache so a fresh machine (or container)
+# can skip that step. On startup, if the user's cache is missing/empty we seed it from
+# the bundled copy; if it already exists we leave it untouched.
+GENESIS_CACHE_BUNDLED = os.path.join(ASSETS_DIR, "genesis_cache")
+GENESIS_CACHE_HOME = os.path.expanduser("~/.cache/genesis")
+
+
+def _restore_genesis_cache():
+    """Seed ~/.cache/genesis from the bundled assets cache if it isn't already populated."""
+    bundled_cvx = os.path.join(GENESIS_CACHE_BUNDLED, "cvx")
+    if not os.path.isdir(bundled_cvx):
+        return  # nothing bundled to restore
+
+    home_cvx = os.path.join(GENESIS_CACHE_HOME, "cvx")
+    if os.path.isdir(home_cvx) and os.listdir(home_cvx):
+        return  # already cached -> leave it alone
+
+    os.makedirs(GENESIS_CACHE_HOME, exist_ok=True)
+    shutil.copytree(bundled_cvx, home_cvx, dirs_exist_ok=True)
+    print(f"[cache] seeded genesis convex-decomposition cache -> {home_cvx}")
+
 
 ########################## backend / init helpers ##########################
 def select_backend():
@@ -164,6 +188,7 @@ def _ensure_gs_init(backend):
     global _GS_INITIALIZED
     if _GS_INITIALIZED:
         return
+    _restore_genesis_cache()
     if backend is None:
         backend = select_backend()
     print(f"[backend] using: {getattr(backend, 'name', backend)}")
