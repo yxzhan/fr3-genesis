@@ -405,9 +405,9 @@ class RobotScene:
         self.head_cam.attach(self.head_link, HEAD_CAM_OFFSET_T)
         self.head_cam.move_to_attach()
 
-        # Base heading-hold state, reset after settling.
-        self._twist = (0.0, 0.0, 0.0)
-        self._heading_hold_yaw = self.get_yaw()
+        # Base heading-hold state (batched [N, ...]), reset after settling.
+        self._twist = np.zeros((self.n_envs, 3))
+        self._heading_hold_yaw = self._yaw_all()
 
     # ------------------------------------------------------------------ build
     def _build_scene(self):
@@ -508,7 +508,6 @@ class RobotScene:
 
         # Vertical spine lift (single prismatic dof), position-servoed and held.
         self.spine_dof = self._dof(SPINE_JOINT_NAME)
-        self._spine_target = SPINE_HOLD
 
         # Active base joints.
         self.steering_dofs = [self._dof(m[0]) for m in DRIVE_MODULES]
@@ -519,9 +518,14 @@ class RobotScene:
         self._all_arm_dofs = self.arm_dofs["left"] + self.arm_dofs["right"]
         self._all_finger_dofs = self.finger_dofs["left"] + self.finger_dofs["right"]
 
-        # Current control targets (updated by set_arm / set_gripper, re-applied each step).
-        self._arm_target = {s: np.array([ARM_HOLD[n] for n in self.arm_joint_names[s]]) for s in ("left", "right")}
-        self._finger_target = {s: np.full(2, GRIPPER_OPEN) for s in ("left", "right")}
+        # Current control targets (updated by set_arm / set_gripper, re-applied each
+        # step). Stored batched as [N, width] so each env can hold a different target.
+        self._arm_target = {
+            s: np.tile(np.array([ARM_HOLD[n] for n in self.arm_joint_names[s]]), (self.n_envs, 1))
+            for s in ("left", "right")
+        }
+        self._finger_target = {s: np.full((self.n_envs, 2), GRIPPER_OPEN) for s in ("left", "right")}
+        self._spine_target = np.full(self.n_envs, SPINE_HOLD)
 
     def _setup_gains(self):
         r = self.robot
@@ -555,14 +559,52 @@ class RobotScene:
         r.set_dofs_kp(np.full(n_pass, 0.0), self.passive_dofs)
         r.set_dofs_kv(np.full(n_pass, 0.0), self.passive_dofs)
 
+    # --- batch I/O adapters: the controller core always sees [N, ...] ----
+    def _read(self, tensor):
+        """numpy view of a Genesis state tensor, always shaped [N, ...]."""
+        arr = tensor.cpu().numpy()
+        return arr if self.batched else arr[None, ...]
+
+    def _read_dofs(self, dofs):
+        return self._read(self.robot.get_dofs_position(dofs))     # [N, len(dofs)]
+
+    def _emit(self, arr):
+        """Squeeze the batch dim back out when non-batched, for Genesis writes."""
+        return arr if self.batched else arr[0]
+
+    def _broadcast(self, value, width):
+        """Normalize a setter argument to [N, width].
+
+        Accepts a scalar, a [width] per-dof vector (broadcast to all envs), or a
+        full [N, width] array. Raises ValueError on any other shape.
+        """
+        a = np.asarray(value, dtype=float)
+        if a.ndim == 0:
+            return np.full((self.n_envs, width), float(a))
+        if a.ndim == 1 and a.shape[0] == width:
+            return np.tile(a, (self.n_envs, 1))
+        if a.ndim == 2 and a.shape == (self.n_envs, width):
+            return a.astype(float)
+        raise ValueError(
+            f"expected scalar, [{width}], or [{self.n_envs}, {width}]; got shape {a.shape}")
+
+    def _yaw_all(self):
+        """Yaw of every env as [N] (uses the batched quaternion read)."""
+        return quat_to_yaw(self._read(self.robot.get_quat()))
+
+    def _yaw_rate_all(self):
+        """Yaw rate (about z) of every env as [N]."""
+        return self._read(self.robot.get_ang())[:, 2]
+
     def _apply_initial_pose(self):
-        q_init = self.robot.get_dofs_position().cpu().numpy()
+        q_init = self._read(self.robot.get_dofs_position())       # [N, n_dofs]
+        # Set the held joints on every env.
         for n, v in ARM_HOLD.items():
-            q_init[self._dof(n)] = v
+            q_init[:, self._dof(n)] = v
         for d in self._all_finger_dofs:
-            q_init[d] = GRIPPER_OPEN
-        q_init[self.spine_dof] = self._spine_target
-        self.robot.set_dofs_position(q_init)
+            q_init[:, d] = GRIPPER_OPEN
+        q_init[:, self.spine_dof] = SPINE_HOLD
+        self.robot.set_dofs_position(self._emit(q_init))
         # Let the free base settle on the ground.
         for _ in range(200):
             self._apply_joint_targets()
@@ -570,30 +612,36 @@ class RobotScene:
 
     # ----------------------------------------------------------- control
     def _apply_joint_targets(self):
-        """Re-issue the stored arm + gripper + spine position targets (called every sim step)."""
-        self.robot.control_dofs_position(np.array([self._spine_target]), [self.spine_dof])
+        """Re-issue the stored arm + gripper + spine position targets (every sim step)."""
+        self.robot.control_dofs_position(self._emit(self._spine_target[:, None]), [self.spine_dof])
         for s in ("left", "right"):
-            self.robot.control_dofs_position(self._arm_target[s], self.arm_dofs[s])
-            self.robot.control_dofs_position(self._finger_target[s], self.finger_dofs[s])
+            self.robot.control_dofs_position(self._emit(self._arm_target[s]), self.arm_dofs[s])
+            self.robot.control_dofs_position(self._emit(self._finger_target[s]), self.finger_dofs[s])
 
     def _apply_base_control(self):
         """Recompute and issue steer/drive commands from the stored twist + heading hold."""
-        vx, vy, wz_cmd = self._twist
-        manual_rotation = abs(wz_cmd) > STOP_EPS
-        cur_yaw = self.get_yaw()
-        if manual_rotation or math.hypot(vx, vy) < STOP_EPS:
-            wz = wz_cmd
-            self._heading_hold_yaw = cur_yaw
-        else:
-            err = _wrap_to_pi(self._heading_hold_yaw - cur_yaw)
-            comp = HEADING_HOLD_KP * err - HEADING_HOLD_KD * self.get_yaw_rate()
-            comp = max(-MAX_HEADING_COMP_RADPS, min(MAX_HEADING_COMP_RADPS, comp))
-            wz = wz_cmd + comp
+        vx = self._twist[:, 0]
+        vy = self._twist[:, 1]
+        wz_cmd = self._twist[:, 2]
+        cur_yaw = self._yaw_all()                                   # [N]
 
-        cur_steer = self.robot.get_dofs_position(self.steering_dofs).cpu().numpy()
+        # Per env: hold heading unless rotating or (near-)stationary.
+        manual_rotation = np.abs(wz_cmd) > STOP_EPS
+        translating = np.hypot(vx, vy) >= STOP_EPS
+        hold = (~manual_rotation) & translating                    # [N] bool
+
+        err = _wrap_to_pi(self._heading_hold_yaw - cur_yaw)
+        comp = HEADING_HOLD_KP * err - HEADING_HOLD_KD * self._yaw_rate_all()
+        comp = np.clip(comp, -MAX_HEADING_COMP_RADPS, MAX_HEADING_COMP_RADPS)
+        wz = np.where(hold, wz_cmd + comp, wz_cmd)
+
+        # Re-anchor the heading reference for envs not currently holding.
+        self._heading_hold_yaw = np.where(hold, self._heading_hold_yaw, cur_yaw)
+
+        cur_steer = self._read_dofs(self.steering_dofs)            # [N, M]
         steer_targets, drive_targets = compute_drive_targets(cur_steer, vx, vy, wz)
-        self.robot.control_dofs_position(steer_targets, self.steering_dofs)
-        self.robot.control_dofs_velocity(drive_targets, self.drive_dofs)
+        self.robot.control_dofs_position(self._emit(steer_targets), self.steering_dofs)
+        self.robot.control_dofs_velocity(self._emit(drive_targets), self.drive_dofs)
 
     def step(self, n=1):
         """Advance the simulation by ``n`` steps, holding all current targets."""
