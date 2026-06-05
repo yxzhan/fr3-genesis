@@ -20,7 +20,7 @@ cloud platform — pick the one matching your GPU backend below.
 
 ### AMD GPU — AUP Learning Cloud (AUPLC)
 
-Sign in: https://www.openhw.io/hub/
+Sign in: https://tpe.aupcloud.io/hub/home
 
 1. Start the **"Genesis Physical Simulation Course"** server.
 2. Open a **Terminal**.
