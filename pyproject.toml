@@ -52,7 +52,14 @@ packages = ["fr3_genesis"]
 # pruning it — installing it out-of-band with `uv pip install` does not survive a
 # later `uv sync`.
 [dependency-groups]
-dev = ["ipykernel"]
+dev = ["ipykernel", "pytest"]
+
+# Pytest: when ROS is sourced, /opt/ros/.../site-packages is on PYTHONPATH and its
+# pytest11 entry-points autoload into our venv; launch_testing/launch_ros fail to
+# import (missing `lark`). Disable just those so `uv run pytest` works as-is.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:launch_testing -p no:launch_ros"
 
 [tool.uv]
 # Pick one of cpu / cu126 / rocm; installing more than one is disallowed.

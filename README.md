@@ -20,7 +20,7 @@ cloud platform — pick the one matching your GPU backend below.
 
 ### AMD GPU — AUP Learning Cloud (AUPLC)
 
-Sign in: https://www.openhw.io/hub/
+Sign in: https://tpe.aupcloud.io/hub/home
 
 1. Start the **"Genesis Physical Simulation Course"** server.
 2. Open a **Terminal**.
@@ -139,6 +139,23 @@ uv run python scripts/scene_robot_tables.py --headless --save-video
 # keyboard teleop (needs a display; falls back to a scripted video when headless)
 uv run python scripts/scene_robot_keyboard.py
 ```
+
+### Parallel / batched simulation
+
+Run many copies of the scene at once by passing `n_envs`:
+
+```python
+from fr3_genesis import RobotScene
+import numpy as np
+
+sim = RobotScene(headless=True, n_envs=9, env_spacing=(8.0, 14.0))
+sim.set_base_velocity(0.0, 0.0, np.linspace(-1.2, 1.2, 9), steps=300)  # per-env yaw
+print(sim.get_yaw().shape)   # (9,)
+```
+
+With `n_envs=1` (default) the API is scalar exactly as before; with `n_envs>1`
+getters return a leading `[n_envs, ...]` dim and setters accept a scalar/per-dof
+value (broadcast) or a full `[n_envs, ...]` array. See `notebooks/parallel_demo.ipynb`.
 
 ## Install as a package (`fr3_genesis`)
 

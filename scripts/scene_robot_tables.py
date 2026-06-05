@@ -227,50 +227,78 @@ def _ensure_gs_init(backend):
 
 ########################## small numpy kinematics helpers ##########################
 def _wrap_to_pi(a):
-    return math.atan2(math.sin(a), math.cos(a))
+    """Wrap angle(s) to (-pi, pi]. Accepts a scalar or a numpy array."""
+    return np.arctan2(np.sin(a), np.cos(a))
 
 
 def _steering_alignment_scale(error):
-    """Fade wheel speed down while the steering is not yet aligned, to avoid side-slip."""
+    """Fade wheel speed down while the steering is not yet aligned, to avoid side-slip.
+
+    Accepts a scalar or a numpy array; returns the same shape, clamped to [0, 1].
+    """
     scale = (STEERING_ZERO_SPEED_ERROR_RAD - error) / (
         STEERING_ZERO_SPEED_ERROR_RAD - STEERING_FULL_SPEED_ERROR_RAD
     )
-    return max(0.0, min(1.0, scale))
+    return np.clip(scale, 0.0, 1.0)
+
+
+def quat_to_yaw(quat):
+    """Yaw (rad) about world z from a (w, x, y, z) quaternion. Accepts [4] or [B, 4]."""
+    q = np.asarray(quat, dtype=float)
+    w, x, y, z = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+    return np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
+# Module geometry, cached as [M] arrays for the vectorized drive solver.
+_MODULE_X = np.array([m[2] for m in DRIVE_MODULES], dtype=float)
+_MODULE_Y = np.array([m[3] for m in DRIVE_MODULES], dtype=float)
 
 
 def compute_drive_targets(cur_steer_angles, vx, vy, wz):
-    """Body twist -> (steer-angle targets, wheel-speed targets), with 180° flip optimization and speed limiting."""
-    steer_targets = np.zeros(len(DRIVE_MODULES))
-    drive_targets = np.zeros(len(DRIVE_MODULES))
+    """Body twist -> (steer-angle targets, wheel-speed targets), batched over envs.
 
-    vectors = []
-    max_speed = 0.0
-    for (_s, _d, x, y) in DRIVE_MODULES:
-        wvx = vx - wz * y
-        wvy = vy + wz * x
-        sp = math.hypot(wvx, wvy)
-        vectors.append((wvx, wvy, sp))
-        max_speed = max(max_speed, sp)
+    Parameters
+    ----------
+    cur_steer_angles : array [B, M]   current steer angle per module, per env
+    vx, vy, wz        : array [B]      body-frame twist per env
+    Returns (steer_targets[B, M], drive_targets[B, M]).
 
+    Vectorized form of the original per-module scalar loop: per-env global speed
+    limiting, the 180-degree steer-flip optimization, holding the steer angle when
+    a module's commanded speed is ~0, and the steering-alignment speed fade.
+    """
+    cur = np.atleast_2d(np.asarray(cur_steer_angles, dtype=float))  # [B, M]
+    vx = np.atleast_1d(np.asarray(vx, dtype=float))                 # [B]
+    vy = np.atleast_1d(np.asarray(vy, dtype=float))
+    wz = np.atleast_1d(np.asarray(wz, dtype=float))
+
+    # Per-module world velocity at each wheel: [B, M]
+    wvx = vx[:, None] - wz[:, None] * _MODULE_Y[None, :]
+    wvy = vy[:, None] + wz[:, None] * _MODULE_X[None, :]
+    sp = np.hypot(wvx, wvy)                                         # [B, M]
+
+    # Per-env speed limit, scaling the whole env's module set together.
     allowed = MAX_WHEEL_SPEED_RADPS * WHEEL_RADIUS_M
-    scale = allowed / max_speed if max_speed > allowed else 1.0
+    max_speed = sp.max(axis=1)                                     # [B]
+    scale = np.where(max_speed > allowed, allowed / np.maximum(max_speed, 1e-12), 1.0)
+    scale = scale[:, None]                                         # [B, 1]
+    wvx = wvx * scale
+    wvy = wvy * scale
+    sp = sp * scale
 
-    for i, (wvx, wvy, sp) in enumerate(vectors):
-        wvx *= scale
-        wvy *= scale
-        sp *= scale
-        cur = cur_steer_angles[i]
-        if sp < STOP_EPS:
-            steer_targets[i] = cur  # when stopped, hold the current steer angle; don't snap back
-            continue
-        raw = math.atan2(wvy, wvx)
-        direct = _wrap_to_pi(raw - cur)
-        flipped = _wrap_to_pi(raw + math.pi - cur)
-        use_flipped = abs(flipped) < abs(direct)
-        delta = flipped if use_flipped else direct
-        steer_targets[i] = cur + delta
-        wheel_speed = (sp / WHEEL_RADIUS_M) * _steering_alignment_scale(abs(delta))
-        drive_targets[i] = -wheel_speed if use_flipped else wheel_speed
+    moving = sp >= STOP_EPS                                        # [B, M]
+    raw = np.arctan2(wvy, wvx)
+    direct = _wrap_to_pi(raw - cur)
+    flipped = _wrap_to_pi(raw + math.pi - cur)
+    use_flipped = np.abs(flipped) < np.abs(direct)
+    delta = np.where(use_flipped, flipped, direct)
+
+    # Hold current steer where stopped; otherwise rotate by the smaller delta.
+    steer_targets = np.where(moving, cur + delta, cur)
+
+    wheel_speed = (sp / WHEEL_RADIUS_M) * _steering_alignment_scale(np.abs(delta))
+    drive = np.where(use_flipped, -wheel_speed, wheel_speed)
+    drive_targets = np.where(moving, drive, 0.0)
 
     return steer_targets, drive_targets
 
@@ -296,16 +324,31 @@ class RobotScene:
         falling back to auto-detection. An explicit value here overrides both.
     camera_res : (int, int)
         Offscreen camera resolution (width, height).
+    n_envs : int
+        Number of parallel environments. 1 (default) builds a single non-batched
+        scene with the classic scalar API. >1 builds ``n_envs`` copies; getters
+        then return a leading ``[n_envs, ...]`` dim and setters accept either a
+        scalar/per-dof value (broadcast to all envs) or a full ``[n_envs, ...]`` array.
+    env_spacing : (float, float)
+        Grid spacing between parallel envs (only used when n_envs > 1).
 
     Recording is opt-in and decided by the caller: call ``start_recording()`` to begin
     capturing frames, then ``save_video(path)`` (or ``close()``) to write the mp4. If you
     never call ``start_recording()``, no frames are captured and ``save_video()`` is a no-op.
     """
 
-    def __init__(self, headless=None, backend=None, camera_res=(960, 640)):
+    def __init__(self, headless=None, save_video=False, video_path=None,
+                 backend=None, camera_res=(960, 640), n_envs=1, env_spacing=(2.0, 2.0)):
+        if int(n_envs) < 1:
+            raise ValueError(f"n_envs must be >= 1, got {n_envs}")
         if headless is None:
             headless = not os.environ.get("DISPLAY")
         self.headless = headless
+        self.n_envs = int(n_envs)
+        self.batched = self.n_envs > 1
+        self.env_spacing = env_spacing
+        self._record = bool(save_video)
+        self.video_path = video_path
         self._recording = False
         self._frame_count = 0
 
@@ -348,7 +391,10 @@ class RobotScene:
         #             color=(0.1, 0.6, 0.8, 0.6),
         #         )
         #     )
-        self.scene.build()
+        if self.batched:
+            self.scene.build(n_envs=self.n_envs, env_spacing=self.env_spacing)
+        else:
+            self.scene.build()
 
         self._setup_handles()
         self._setup_gains()
@@ -359,9 +405,9 @@ class RobotScene:
         self.head_cam.attach(self.head_link, HEAD_CAM_OFFSET_T)
         self.head_cam.move_to_attach()
 
-        # Base heading-hold state, reset after settling.
-        self._twist = (0.0, 0.0, 0.0)
-        self._heading_hold_yaw = self.get_yaw()
+        # Base heading-hold state (batched [N, ...]), reset after settling.
+        self._twist = np.zeros((self.n_envs, 3))
+        self._heading_hold_yaw = self._yaw_all()
 
     # ------------------------------------------------------------------ build
     def _build_scene(self):
@@ -462,7 +508,6 @@ class RobotScene:
 
         # Vertical spine lift (single prismatic dof), position-servoed and held.
         self.spine_dof = self._dof(SPINE_JOINT_NAME)
-        self._spine_target = SPINE_HOLD
 
         # Active base joints.
         self.steering_dofs = [self._dof(m[0]) for m in DRIVE_MODULES]
@@ -473,9 +518,14 @@ class RobotScene:
         self._all_arm_dofs = self.arm_dofs["left"] + self.arm_dofs["right"]
         self._all_finger_dofs = self.finger_dofs["left"] + self.finger_dofs["right"]
 
-        # Current control targets (updated by set_arm / set_gripper, re-applied each step).
-        self._arm_target = {s: np.array([ARM_HOLD[n] for n in self.arm_joint_names[s]]) for s in ("left", "right")}
-        self._finger_target = {s: np.full(2, GRIPPER_OPEN) for s in ("left", "right")}
+        # Current control targets (updated by set_arm / set_gripper, re-applied each
+        # step). Stored batched as [N, width] so each env can hold a different target.
+        self._arm_target = {
+            s: np.tile(np.array([ARM_HOLD[n] for n in self.arm_joint_names[s]]), (self.n_envs, 1))
+            for s in ("left", "right")
+        }
+        self._finger_target = {s: np.full((self.n_envs, 2), GRIPPER_OPEN) for s in ("left", "right")}
+        self._spine_target = np.full(self.n_envs, SPINE_HOLD)
 
     def _setup_gains(self):
         r = self.robot
@@ -509,14 +559,52 @@ class RobotScene:
         r.set_dofs_kp(np.full(n_pass, 0.0), self.passive_dofs)
         r.set_dofs_kv(np.full(n_pass, 0.0), self.passive_dofs)
 
+    # --- batch I/O adapters: the controller core always sees [N, ...] ----
+    def _read(self, tensor):
+        """numpy view of a Genesis state tensor, always shaped [N, ...]."""
+        arr = tensor.cpu().numpy()
+        return arr if self.batched else arr[None, ...]
+
+    def _read_dofs(self, dofs):
+        return self._read(self.robot.get_dofs_position(dofs))     # [N, len(dofs)]
+
+    def _emit(self, arr):
+        """Squeeze the batch dim back out when non-batched, for Genesis writes."""
+        return arr if self.batched else arr[0]
+
+    def _broadcast(self, value, width):
+        """Normalize a setter argument to [N, width].
+
+        Accepts a scalar, a [width] per-dof vector (broadcast to all envs), or a
+        full [N, width] array. Raises ValueError on any other shape.
+        """
+        a = np.asarray(value, dtype=float)
+        if a.ndim == 0:
+            return np.full((self.n_envs, width), float(a))
+        if a.ndim == 1 and a.shape[0] == width:
+            return np.tile(a, (self.n_envs, 1))
+        if a.ndim == 2 and a.shape == (self.n_envs, width):
+            return a.astype(float)
+        raise ValueError(
+            f"expected scalar, [{width}], or [{self.n_envs}, {width}]; got shape {a.shape}")
+
+    def _yaw_all(self):
+        """Yaw of every env as [N] (uses the batched quaternion read)."""
+        return quat_to_yaw(self._read(self.robot.get_quat()))
+
+    def _yaw_rate_all(self):
+        """Yaw rate (about z) of every env as [N]."""
+        return self._read(self.robot.get_ang())[:, 2]
+
     def _apply_initial_pose(self):
-        q_init = self.robot.get_dofs_position().cpu().numpy()
+        q_init = self._read(self.robot.get_dofs_position())       # [N, n_dofs]
+        # Set the held joints on every env.
         for n, v in ARM_HOLD.items():
-            q_init[self._dof(n)] = v
+            q_init[:, self._dof(n)] = v
         for d in self._all_finger_dofs:
-            q_init[d] = GRIPPER_OPEN
-        q_init[self.spine_dof] = self._spine_target
-        self.robot.set_dofs_position(q_init)
+            q_init[:, d] = GRIPPER_OPEN
+        q_init[:, self.spine_dof] = SPINE_HOLD
+        self.robot.set_dofs_position(self._emit(q_init))
         # Let the free base settle on the ground.
         for _ in range(200):
             self._apply_joint_targets()
@@ -524,30 +612,36 @@ class RobotScene:
 
     # ----------------------------------------------------------- control
     def _apply_joint_targets(self):
-        """Re-issue the stored arm + gripper + spine position targets (called every sim step)."""
-        self.robot.control_dofs_position(np.array([self._spine_target]), [self.spine_dof])
+        """Re-issue the stored arm + gripper + spine position targets (every sim step)."""
+        self.robot.control_dofs_position(self._emit(self._spine_target[:, None]), [self.spine_dof])
         for s in ("left", "right"):
-            self.robot.control_dofs_position(self._arm_target[s], self.arm_dofs[s])
-            self.robot.control_dofs_position(self._finger_target[s], self.finger_dofs[s])
+            self.robot.control_dofs_position(self._emit(self._arm_target[s]), self.arm_dofs[s])
+            self.robot.control_dofs_position(self._emit(self._finger_target[s]), self.finger_dofs[s])
 
     def _apply_base_control(self):
         """Recompute and issue steer/drive commands from the stored twist + heading hold."""
-        vx, vy, wz_cmd = self._twist
-        manual_rotation = abs(wz_cmd) > STOP_EPS
-        cur_yaw = self.get_yaw()
-        if manual_rotation or math.hypot(vx, vy) < STOP_EPS:
-            wz = wz_cmd
-            self._heading_hold_yaw = cur_yaw
-        else:
-            err = _wrap_to_pi(self._heading_hold_yaw - cur_yaw)
-            comp = HEADING_HOLD_KP * err - HEADING_HOLD_KD * self.get_yaw_rate()
-            comp = max(-MAX_HEADING_COMP_RADPS, min(MAX_HEADING_COMP_RADPS, comp))
-            wz = wz_cmd + comp
+        vx = self._twist[:, 0]
+        vy = self._twist[:, 1]
+        wz_cmd = self._twist[:, 2]
+        cur_yaw = self._yaw_all()                                   # [N]
 
-        cur_steer = self.robot.get_dofs_position(self.steering_dofs).cpu().numpy()
+        # Per env: hold heading unless rotating or (near-)stationary.
+        manual_rotation = np.abs(wz_cmd) > STOP_EPS
+        translating = np.hypot(vx, vy) >= STOP_EPS
+        hold = (~manual_rotation) & translating                    # [N] bool
+
+        err = _wrap_to_pi(self._heading_hold_yaw - cur_yaw)
+        comp = HEADING_HOLD_KP * err - HEADING_HOLD_KD * self._yaw_rate_all()
+        comp = np.clip(comp, -MAX_HEADING_COMP_RADPS, MAX_HEADING_COMP_RADPS)
+        wz = np.where(hold, wz_cmd + comp, wz_cmd)
+
+        # Re-anchor the heading reference for envs not currently holding.
+        self._heading_hold_yaw = np.where(hold, self._heading_hold_yaw, cur_yaw)
+
+        cur_steer = self._read_dofs(self.steering_dofs)            # [N, M]
         steer_targets, drive_targets = compute_drive_targets(cur_steer, vx, vy, wz)
-        self.robot.control_dofs_position(steer_targets, self.steering_dofs)
-        self.robot.control_dofs_velocity(drive_targets, self.drive_dofs)
+        self.robot.control_dofs_position(self._emit(steer_targets), self.steering_dofs)
+        self.robot.control_dofs_velocity(self._emit(drive_targets), self.drive_dofs)
 
     def step(self, n=1):
         """Advance the simulation by ``n`` steps, holding all current targets."""
@@ -564,8 +658,15 @@ class RobotScene:
 
     # base ------------------------------------------------------------
     def set_base_velocity(self, vx, vy, wz, steps=1):
-        """Set the body-frame base velocity (vx fwd, vy left, wz yaw) and advance ``steps`` steps."""
-        self._twist = (float(vx), float(vy), float(wz))
+        """Set the body-frame base velocity (vx fwd, vy left, wz yaw) and advance ``steps``.
+
+        Each of vx/vy/wz may be a scalar (same for all envs) or a length-N array.
+        """
+        self._twist = np.stack([
+            np.broadcast_to(np.asarray(vx, dtype=float), (self.n_envs,)),
+            np.broadcast_to(np.asarray(vy, dtype=float), (self.n_envs,)),
+            np.broadcast_to(np.asarray(wz, dtype=float), (self.n_envs,)),
+        ], axis=1)
         return self.step(steps)
 
     def stop_base(self, steps=1):
@@ -579,104 +680,129 @@ class RobotScene:
         to let them arrive) -- useful to undo earlier joint/IK moves before a new task.
         """
         for s in ("left", "right"):
-            self._arm_target[s] = np.array([ARM_HOLD[n] for n in self.arm_joint_names[s]])
-            self._finger_target[s] = np.full(2, GRIPPER_OPEN)
+            self._arm_target[s] = np.tile(
+                np.array([ARM_HOLD[n] for n in self.arm_joint_names[s]]), (self.n_envs, 1))
+            self._finger_target[s] = np.full((self.n_envs, 2), GRIPPER_OPEN)
         self.step(settle)
         return self
 
     def teleport_base(self, x, y, yaw=None, settle=100):
         """Instantly move the base to world ``(x, y)`` (z kept) with optional ``yaw`` (rad).
 
-        Unlike ``set_base_velocity`` this does not drive the wheels -- it snaps the free
-        base to the new pose, zeroes the commanded twist, then steps ``settle`` times so
-        the arms re-settle and the heading-hold reference is re-anchored.
+        x / y / yaw may be scalars (all envs) or length-N arrays. Unlike
+        ``set_base_velocity`` this does not drive the wheels -- it snaps the free base to
+        the new pose, zeroes the commanded twist, then steps ``settle`` times so the arms
+        re-settle and the heading-hold reference is re-anchored.
         """
-        pos = self.get_pos()
-        pos[0], pos[1] = float(x), float(y)
-        self.robot.set_pos(pos)
+        pos = self._read(self.robot.get_pos())                    # [N, 3]
+        pos[:, 0] = np.broadcast_to(np.asarray(x, dtype=float), (self.n_envs,))
+        pos[:, 1] = np.broadcast_to(np.asarray(y, dtype=float), (self.n_envs,))
+        self.robot.set_pos(self._emit(pos))
         if yaw is not None:
-            half = 0.5 * float(yaw)
-            self.robot.set_quat(np.array([math.cos(half), 0.0, 0.0, math.sin(half)]))
-        self._twist = (0.0, 0.0, 0.0)
+            half = 0.5 * np.broadcast_to(np.asarray(yaw, dtype=float), (self.n_envs,))
+            quat = np.stack([np.cos(half), np.zeros(self.n_envs),
+                             np.zeros(self.n_envs), np.sin(half)], axis=1)  # [N, 4]
+            self.robot.set_quat(self._emit(quat))
+        self._twist = np.zeros((self.n_envs, 3))
         self.step(settle)
-        self._heading_hold_yaw = self.get_yaw()
+        self._heading_hold_yaw = self._yaw_all()
         return self
 
     def get_pos(self):
-        return self.robot.get_pos().cpu().numpy()
+        p = self._read(self.robot.get_pos())                      # [N, 3]
+        return p if self.batched else p[0]
 
     def get_yaw(self):
-        q = self.robot.get_quat()
-        w, x, y, z = (float(q[0]), float(q[1]), float(q[2]), float(q[3]))
-        return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+        y = self._yaw_all()                                       # [N]
+        return y if self.batched else float(y[0])
 
     def get_yaw_rate(self):
-        return float(self.robot.get_ang()[2])
+        r = self._yaw_rate_all()                                  # [N]
+        return r if self.batched else float(r[0])
 
     def get_base_pose(self):
-        """Return ((x, y, z), yaw) of the robot base."""
+        """Return ((x, y, z), yaw). Batched: ([N,3], [N]); else ([3], float)."""
         return self.get_pos(), self.get_yaw()
 
     # joints ----------------------------------------------------------
     def set_arm(self, side, q, step=False, steps=1):
-        """Set the 7 arm joint position targets for ``side`` ('left'/'right')."""
-        self._arm_target[side] = np.asarray(q, dtype=float).reshape(7)
+        """Set the 7 arm joint targets for ``side``. ``q`` is [7] (all envs) or [N, 7]."""
+        self._arm_target[side] = self._broadcast(q, 7)
         if step:
             self.step(steps)
         return self
 
     def get_arm(self, side):
-        return self.robot.get_dofs_position(self.arm_dofs[side]).cpu().numpy()
+        q = self._read_dofs(self.arm_dofs[side])                  # [N, 7]
+        return q if self.batched else q[0]
 
     def set_gripper(self, side, opening, step=False, steps=1):
-        """Set gripper opening (meters per finger, 0=closed .. 0.04=open) for ``side``."""
-        self._finger_target[side] = np.full(2, float(opening))
+        """Set gripper opening (m/finger). ``opening`` is a scalar (all envs) or [N]."""
+        a = np.asarray(opening, dtype=float)
+        if a.ndim == 0:
+            self._finger_target[side] = np.full((self.n_envs, 2), float(a))
+        else:
+            self._finger_target[side] = np.repeat(a.reshape(self.n_envs, 1), 2, axis=1)
         if step:
             self.step(steps)
         return self
 
     def set_spine(self, height, step=False, steps=1):
-        """Set the vertical spine lift height (meters), clamped to [0.0, 0.85]."""
-        self._spine_target = max(SPINE_LOWER, min(SPINE_UPPER, float(height)))
+        """Set the spine lift height (m), clamped to [0, 0.85]. Scalar or [N]."""
+        h = np.clip(np.asarray(height, dtype=float), SPINE_LOWER, SPINE_UPPER)
+        self._spine_target = np.broadcast_to(h, (self.n_envs,)).astype(float).copy()
         if step:
             self.step(steps)
         return self
 
     def get_spine(self):
-        """Current vertical spine lift height (meters)."""
-        return float(self.robot.get_dofs_position([self.spine_dof]).cpu().numpy()[0])
+        """Current spine lift height (m). Batched: [N]; else float."""
+        v = self._read_dofs([self.spine_dof])[:, 0]               # [N]
+        return v if self.batched else float(v[0])
 
     # IK --------------------------------------------------------------
     def _tcp_of(self, side):
-        """Current finger-TCP position of ``side`` (link7 origin minus the tool offset)."""
-        link7 = self.ee_link[side].get_pos().cpu().numpy()
-        return link7 - np.array([0.0, 0.0, TCP_OFFSET])
+        """Current finger-TCP position of ``side`` (link7 origin minus tool offset).
+
+        Batched returns [N, 3]; non-batched returns [3]."""
+        link7 = self._read(self.ee_link[side].get_pos())          # [N, 3]
+        tcp = link7 - np.array([0.0, 0.0, TCP_OFFSET])
+        return tcp if self.batched else tcp[0]
 
     def get_ee_pos(self, side):
-        """Current finger tool-center-point (x, y, z) of the ``side`` arm."""
+        """Current finger TCP (x, y, z) of the ``side`` arm. [N,3] batched else [3]."""
         return self._tcp_of(side)
 
     def ik(self, side, pos, quat=DOWN_QUAT):
-        """Return the 7 arm joint angles placing ``side`` finger TCP at ``pos`` with ``quat``.
+        """Arm joint angles placing ``side`` finger TCP at ``pos`` with ``quat``.
 
-        ``pos`` is the finger tool-center-point; it is offset up to the link7 frame that
-        Genesis actually exposes (assumes a roughly gripper-down orientation).
+        Batched: ``pos`` is [N, 3], ``quat`` [4] or [N, 4]; returns [N, 7].
+        Non-batched: ``pos`` is [3]; returns [7].
         """
-        target = np.asarray(pos, dtype=float) + np.array([0.0, 0.0, TCP_OFFSET])
+        offset = np.array([0.0, 0.0, TCP_OFFSET])
+        if self.batched:
+            target = np.broadcast_to(np.asarray(pos, dtype=float), (self.n_envs, 3)) + offset
+            q = np.broadcast_to(np.asarray(quat, dtype=float), (self.n_envs, 4))
+            q_full = self.robot.inverse_kinematics(
+                link=self.ee_link[side], pos=target, quat=q, dofs_idx_local=self.arm_dofs[side])
+            return q_full[:, self.arm_qs[side]].cpu().numpy()     # [N, 7]
+        target = np.asarray(pos, dtype=float) + offset
         q_full = self.robot.inverse_kinematics(
-            link=self.ee_link[side],
-            pos=target,
-            quat=np.asarray(quat, dtype=float),
-            dofs_idx_local=self.arm_dofs[side],
-        )
-        # q_full is qpos-indexed; read the arm's qpos slots (offset from dof indices
-        # by the free base). The values are joint angles, usable as dof position targets.
-        return q_full[self.arm_qs[side]].cpu().numpy()
+            link=self.ee_link[side], pos=target, quat=np.asarray(quat, dtype=float),
+            dofs_idx_local=self.arm_dofs[side])
+        return q_full[self.arm_qs[side]].cpu().numpy()            # [7]
 
     def move_ee(self, side, pos, quat=DOWN_QUAT, n_waypoints=60, settle=2):
-        """Move ``side`` finger TCP to ``pos`` along an interpolated straight line of way-points."""
-        start = self._tcp_of(side)
-        target = np.asarray(pos, dtype=float)
+        """Move ``side`` finger TCP to ``pos`` along an interpolated straight line.
+
+        ``pos`` is [3] (all envs) or [N, 3]; each env follows its own start->target line.
+        """
+        start = self._tcp_of(side)                                # [3] or [N, 3]
+        if self.batched:
+            start = np.atleast_2d(start)                          # [N, 3]
+            target = np.broadcast_to(np.asarray(pos, dtype=float), (self.n_envs, 3))
+        else:
+            target = np.asarray(pos, dtype=float)
         for i in range(1, n_waypoints + 1):
             p = start + (target - start) * i / n_waypoints
             self.set_arm(side, self.ik(side, p, quat))
@@ -737,24 +863,31 @@ class RobotScene:
             self.save_video()
 
     # convenience demo ------------------------------------------------
-    def demo(self, video_path=None):
-        """A short smoke-test: drive a small path and do one IK reach with the left arm.
+    def demo(self):
+        """Short smoke demo. Single-env: drive a path + one IK reach. Batched:
+        give each env a different rotation speed so the parallelism is visible.
 
-        Used by the CLI; the example notebook is the full usage guide. If the caller
-        started recording (``start_recording()``) beforehand, the run is written to
-        ``video_path`` (or a timestamped default) at the end.
+        If the scene was constructed with ``save_video=True``, the run is recorded and
+        written to ``video_path`` (or a timestamped default) at the end.
         """
-        self.set_base_velocity(LINEAR_SPEED_MPS, 0.0, 0.0, steps=200)     # forward
-        self.set_base_velocity(0.0, 0.0, ANGULAR_SPEED_RADPS, steps=120)  # rotate in place
-        self.set_base_velocity(0.0, LINEAR_SPEED_MPS, 0.0, steps=120)     # strafe left
-        self.stop_base(steps=40)
-        # one IK reach in front of the left arm, then back to the tuck pose
-        pos, _ = self.get_base_pose()
-        self.move_ee("left", (pos[0] + 0.45, pos[1] + 0.3, 0.95), n_waypoints=40)
-        self.set_arm("left", [ARM_HOLD[n] for n in self.arm_joint_names["left"]])
-        self.step(60)
-        if self._recording:
-            self.save_video(video_path)
+        if self._record:
+            self.start_recording()
+        if self.batched:
+            wz = np.linspace(-ANGULAR_SPEED_RADPS, ANGULAR_SPEED_RADPS, self.n_envs)
+            self.set_base_velocity(LINEAR_SPEED_MPS, 0.0, 0.0, steps=150)  # all forward
+            self.set_base_velocity(0.0, 0.0, wz, steps=150)                # per-env spin
+            self.stop_base(steps=40)
+        else:
+            self.set_base_velocity(LINEAR_SPEED_MPS, 0.0, 0.0, steps=200)
+            self.set_base_velocity(0.0, 0.0, ANGULAR_SPEED_RADPS, steps=120)
+            self.set_base_velocity(0.0, LINEAR_SPEED_MPS, 0.0, steps=120)
+            self.stop_base(steps=40)
+            pos, _ = self.get_base_pose()
+            self.move_ee("left", (pos[0] + 0.45, pos[1] + 0.3, 0.95), n_waypoints=40)
+            self.set_arm("left", [ARM_HOLD[n] for n in self.arm_joint_names["left"]])
+            self.step(60)
+        if self._record:
+            self.save_video(self.video_path)
         return self
 
 
@@ -771,6 +904,8 @@ def _parse_args(argv=None):
     p.add_argument("--video-path", default=None, help="Output mp4 path (default: timestamped).")
     p.add_argument("--backend", choices=["auto", "cpu", "cuda", "amd", "metal"], default="auto",
                    help="Genesis backend (default: auto-select).")
+    p.add_argument("--n-envs", type=int, default=1,
+                   help="Number of parallel environments (default: 1 = scalar mode).")
     return p.parse_args(argv)
 
 
@@ -782,15 +917,16 @@ def main(argv=None):
     args = _parse_args(argv)
     sim = RobotScene(
         headless=args.headless,
+        save_video=args.save_video,
+        video_path=args.video_path,
         backend=_resolve_backend(args.backend),
+        n_envs=args.n_envs,
     )
-    if args.save_video:
-        sim.start_recording()
     print("=" * 80)
     print("✓ Scene built (11 tables + 9 letters + 3 cutlery + 1 mobile dual-arm robot)")
     print("  Running the smoke-test demo; see notebooks/robot_scene_demo.ipynb for full usage.")
     print("=" * 80)
-    sim.demo(video_path=args.video_path)
+    sim.demo()
     print("✓ Done!")
 
 
