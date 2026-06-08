@@ -570,10 +570,11 @@ name = "fr3-genesis"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "genesis-world" },
+    { name = "genesis-world", extra = ["usd"] },
     { name = "ipywidgets" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-11-fr3-genesis-cpu' and extra == 'extra-11-fr3-genesis-cu126') or (extra == 'extra-11-fr3-genesis-cpu' and extra == 'extra-11-fr3-genesis-rocm') or (extra == 'extra-11-fr3-genesis-cu126' and extra == 'extra-11-fr3-genesis-rocm')" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-11-fr3-genesis-cpu' and extra == 'extra-11-fr3-genesis-cu126') or (extra == 'extra-11-fr3-genesis-cpu' and extra == 'extra-11-fr3-genesis-rocm') or (extra == 'extra-11-fr3-genesis-cu126' and extra == 'extra-11-fr3-genesis-rocm')" },
+    { name = "omniverse-kit", marker = "(python_full_version < '3.11' and sys_platform != 'darwin') or (python_full_version >= '3.11' and extra == 'extra-11-fr3-genesis-cpu' and extra == 'extra-11-fr3-genesis-cu126') or (python_full_version >= '3.11' and extra == 'extra-11-fr3-genesis-cpu' and extra == 'extra-11-fr3-genesis-rocm') or (python_full_version >= '3.11' and extra == 'extra-11-fr3-genesis-cu126' and extra == 'extra-11-fr3-genesis-rocm') or (sys_platform == 'darwin' and extra == 'extra-11-fr3-genesis-cpu' and extra == 'extra-11-fr3-genesis-cu126') or (sys_platform == 'darwin' and extra == 'extra-11-fr3-genesis-cpu' and extra == 'extra-11-fr3-genesis-rocm') or (sys_platform == 'darwin' and extra == 'extra-11-fr3-genesis-cu126' and extra == 'extra-11-fr3-genesis-rocm')" },
     { name = "pynput" },
     { name = "sidecar" },
     { name = "tqdm" },
@@ -600,9 +601,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "genesis-world", specifier = "==0.4.6" },
+    { name = "genesis-world", extras = ["usd"], specifier = "==0.4.6" },
     { name = "ipywidgets" },
     { name = "numpy" },
+    { name = "omniverse-kit", marker = "python_full_version < '3.11' and sys_platform != 'darwin'", index = "https://pypi.nvidia.com/" },
     { name = "pynput" },
     { name = "sidecar" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'rocm'", index = "https://download.pytorch.org/whl/rocm7.2", conflict = { package = "fr3-genesis", extra = "rocm" } },
@@ -713,6 +715,11 @@ dependencies = [
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/46/8a/8b1e49767d010a33d909608dcb14b61f37cb9263239399260632bee63df4/genesis_world-0.4.6-py3-none-any.whl", hash = "sha256:d2cf05d0e416b3432e1e02d86b6269c5e8f1a8458852836a2dda6040543d2195", size = 82572753, upload-time = "2026-04-11T19:37:41.859Z" },
+]
+
+[package.optional-dependencies]
+usd = [
+    { name = "usd-core" },
 ]
 
 [[package]]
@@ -1662,6 +1669,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/56/9a/fff8376f8e3d084cd1530e1ef7b879bb7d6d265620c95c1b322725c694f4/nvidia_nvtx_cu12-12.6.77-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:b90bed3df379fa79afbd21be8e04a0314336b8ae16768b58f2d34cb1d04cd7d2", size = 89276, upload-time = "2024-11-20T17:38:27.621Z" },
     { url = "https://files.pythonhosted.org/packages/9e/4e/0d0c945463719429b7bd21dece907ad0bde437a2ff12b9b12fee94722ab0/nvidia_nvtx_cu12-12.6.77-py3-none-manylinux2014_x86_64.whl", hash = "sha256:6574241a3ec5fdc9334353ab8c479fe75841dbe8f4532a8fc97ce63503330ba1", size = 89265, upload-time = "2024-10-01T17:00:38.172Z" },
     { url = "https://files.pythonhosted.org/packages/f7/cd/98a447919d4ed14d407ac82b14b0a0c9c1dbfe81099934b1fc3bfd1e6316/nvidia_nvtx_cu12-12.6.77-py3-none-win_amd64.whl", hash = "sha256:2fb11a4af04a5e6c84073e6404d26588a34afd35379f0855a99797897efa75c0", size = 56434, upload-time = "2024-10-01T17:11:13.124Z" },
+]
+
+[[package]]
+name = "omniverse-kit"
+version = "106.5.0.162521"
+source = { registry = "https://pypi.nvidia.com/" }
+wheels = [
+    { url = "https://pypi.nvidia.com/omniverse-kit/omniverse_kit-106.5.0.162521-cp310-none-manylinux_2_34_x86_64.whl", hash = "sha256:c320dfb1dba2c660102e95fb48af9c3617933e5916d184d84f71917ca6bad7f1" },
+    { url = "https://pypi.nvidia.com/omniverse-kit/omniverse_kit-106.5.0.162521-cp310-none-win_amd64.whl", hash = "sha256:167db2d4a802ae7d00725364da695d41fef729ab09bfc2f0fd1cb30bde3e2c57" },
 ]
 
 [[package]]
@@ -3050,6 +3066,22 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/55/e3/70399cb7dd41c10ac53367ae42139cf4b1ca5f36bb3dc6c9d33acdb43655/typing_inspection-0.4.2.tar.gz", hash = "sha256:ba561c48a67c5958007083d386c3295464928b01faa735ab8547c5692e87f464", size = 75949, upload-time = "2025-10-01T02:14:41.687Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/dc/9b/47798a6c91d8bdb567fe2698fe81e0c6b7cb7ef4d13da4114b41d239f65d/typing_inspection-0.4.2-py3-none-any.whl", hash = "sha256:4ed1cacbdc298c220f1bd249ed5287caa16f34d44ef4e9c3d0cbad5b521545e7", size = 14611, upload-time = "2025-10-01T02:14:40.154Z" },
+]
+
+[[package]]
+name = "usd-core"
+version = "25.11"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d3/0e/4d8fca99a8176a138da9adcb54e1e04d5c80aeb05441a8a7b9d9a224e0aa/usd_core-25.11-cp310-none-macosx_10_9_universal2.whl", hash = "sha256:99462dadaf2bada1d6780d46b6992ab876de2dc03afdf8bcdb9a55f6e8ac4370", size = 38455982, upload-time = "2025-10-24T19:01:05.787Z" },
+    { url = "https://files.pythonhosted.org/packages/91/2b/5a88e24d3d5289feaa62b3a996fdeaa96e66029acd5b218298944573f2ba/usd_core-25.11-cp310-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:2e7fe932069500056510c0881ed4627b654180d2fdb39998f78391cf0d701b1f", size = 27524067, upload-time = "2025-10-24T19:01:08.909Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/0a/97b7ee04769171ccb7f6c27ae3a10cf461d4b924b48b2453423c9276747e/usd_core-25.11-cp310-none-win_amd64.whl", hash = "sha256:78aa4e5308042bb2f2358480f0ca3f4b416fbeb8363fbcf74bea527d7f8ba0ce", size = 13026494, upload-time = "2025-10-24T19:01:12.535Z" },
+    { url = "https://files.pythonhosted.org/packages/da/9a/2a27b2ff16f8def2ef384a7deebb0e670c1016ea9e5ce7b0ebb14bb9ea93/usd_core-25.11-cp311-none-macosx_10_9_universal2.whl", hash = "sha256:3485b21e8319a74b860df96122fbf7c43a2018b76dd975d3855a5f88a5cdba67", size = 38455875, upload-time = "2025-10-24T19:01:15.247Z" },
+    { url = "https://files.pythonhosted.org/packages/78/6a/fe4feefe867e92e3c657c38bc0041a2b39e035f7fdf37b4d9394c959871e/usd_core-25.11-cp311-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a971c76ee4470a318df0517109fa8302f4bfa4f42c1f26b011658bb2ae6b6fa4", size = 27516181, upload-time = "2025-10-24T19:01:18.508Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/12/50ab94ef969c4f9cfd08a9086ebd544e9fa3caadd57587e8851e612f2805/usd_core-25.11-cp311-none-win_amd64.whl", hash = "sha256:dff4cf30a36659ce8ddf35b8d013ee02516487174aafa806938c34a782cde89c", size = 13027051, upload-time = "2025-10-24T19:01:21.832Z" },
+    { url = "https://files.pythonhosted.org/packages/6c/a4/92db335084f0de14b5d4e1800b847057e3ef36bdbb211e5617f3d9940e92/usd_core-25.11-cp312-none-macosx_10_9_universal2.whl", hash = "sha256:bbf89d0671e0773b957a5a3a3e0178e13d4318d46fd8201fcf1d87e3d5501556", size = 38511379, upload-time = "2025-10-24T19:01:24.506Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/f1/dbf18bee5b569a06119f0cde798daeef4837887594a0caf415eb1d75112a/usd_core-25.11-cp312-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c05c05150f6c4598e0738677f0b7c8f82ff9fc492d040ed78147eb1ad5ce8545", size = 27393145, upload-time = "2025-10-24T19:01:27.841Z" },
+    { url = "https://files.pythonhosted.org/packages/48/34/dd9883f27526288de19741100cb5b75f2725423367a999c055a677d1d88a/usd_core-25.11-cp312-none-win_amd64.whl", hash = "sha256:7bc5aaad20287bfc821e73e2ced99123e448e40ffd018acf99b09975eab4012d", size = 13061673, upload-time = "2025-10-24T19:01:30.396Z" },
 ]
 
 [[package]]

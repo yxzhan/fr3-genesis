@@ -155,6 +155,7 @@ def _find_assets_dir():
 
 ASSETS_DIR = _find_assets_dir()
 MJCF_DIR = os.path.join(ASSETS_DIR, "mjcf")
+USD_DIR = os.path.join(ASSETS_DIR, "usd")
 URDF_PATH = os.path.join(ASSETS_DIR, "urdf", "mobile_fr3_duo_v0_2_franka_hand.urdf")
 VIDEO_DIR = os.path.join(SCRIPT_DIR, "videos")
 
@@ -331,6 +332,10 @@ class RobotScene:
         scalar/per-dof value (broadcast to all envs) or a full ``[n_envs, ...]`` array.
     env_spacing : (float, float)
         Grid spacing between parallel envs (only used when n_envs > 1).
+    asset_format : str
+        Source format for the table/letter/cutlery props: ``"mjcf"`` (default,
+        loads ``assets/mjcf/<name>/<name>.xml``) or ``"usd"`` (loads
+        ``assets/usd/<name>.usd``). The robot itself is always loaded from URDF.
 
     Recording is opt-in and decided by the caller: call ``start_recording()`` to begin
     capturing frames, then ``save_video(path)`` (or ``close()``) to write the mp4. If you
@@ -338,9 +343,13 @@ class RobotScene:
     """
 
     def __init__(self, headless=None, save_video=False, video_path=None,
-                 backend=None, camera_res=(960, 640), n_envs=1, env_spacing=(2.0, 2.0)):
+                 backend=None, camera_res=(960, 640), n_envs=1, env_spacing=(2.0, 2.0),
+                 asset_format="usd"):
         if int(n_envs) < 1:
             raise ValueError(f"n_envs must be >= 1, got {n_envs}")
+        if asset_format not in ("mjcf", "usd"):
+            raise ValueError(f"asset_format must be 'mjcf' or 'usd', got {asset_format!r}")
+        self.asset_format = asset_format
         if headless is None:
             headless = not os.environ.get("DISPLAY")
         self.headless = headless
@@ -410,6 +419,20 @@ class RobotScene:
         self._heading_hold_yaw = self._yaw_all()
 
     # ------------------------------------------------------------------ build
+    def _prop_morph(self, name, pos, quat=None):
+        """Morph for a table/letter/cutlery prop ``name``, honoring ``self.asset_format``.
+
+        MJCF assets live at ``mjcf/<name>/<name>.xml``; the matching USD export lives
+        at ``usd/<name>.usd``. Both morphs take the same ``pos``/``quat`` so callers
+        don't care which format is active.
+        """
+        kw = {"pos": pos}
+        if quat is not None:
+            kw["quat"] = quat
+        if self.asset_format == "usd":
+            return gs.morphs.USD(file=os.path.join(USD_DIR, f"{name}.usd"), **kw)
+        return gs.morphs.MJCF(file=os.path.join(MJCF_DIR, name, f"{name}.xml"), **kw)
+
     def _build_scene(self):
         # ---- ground (high friction so the drive wheels grip) ----
         self.scene.add_entity(
@@ -418,14 +441,13 @@ class RobotScene:
         )
 
         # ---- 11 tables (welded to world) ----
-        table_mjcf = os.path.join(MJCF_DIR, "table_edit", "table_edit.xml")
         table_positions = [
             (-2.0, 3.0, 0.0), (-2.0, 1.5, 0.0), (-2.0, 0.0, 0.0), (-2.0, -1.5, 0.0), (-2.0, -3.0, 0.0),
             (2.0, 3.0, 0.0), (2.0, 1.5, 0.0), (2.0, 0.0, 0.0), (2.0, -1.5, 0.0), (2.0, -3.0, 0.0),
             (0.0, -4.5, 0.0),  # bottom center (top center is reserved for the robot)
         ]
         for pos in table_positions:
-            self.scene.add_entity(gs.morphs.MJCF(file=table_mjcf, pos=pos))
+            self.scene.add_entity(self._prop_morph("table_edit", pos))
 
         # ---- 9 letters (black), each needs +90° about X to stand upright ----
         letter_black = gs.surfaces.Default(color=(0.0, 0.0, 0.0))
@@ -438,9 +460,8 @@ class RobotScene:
             "I": (0.0, -4.5, 0.7),
         }
         for letter, (tx, ty, tz) in letter_table_pos.items():
-            letter_mjcf = os.path.join(MJCF_DIR, f"{letter}_edit", f"{letter}_edit.xml")
             self.scene.add_entity(
-                gs.morphs.MJCF(file=letter_mjcf, pos=(tx, ty, tz + 0.061), quat=letter_quat),
+                self._prop_morph(f"{letter}_edit", pos=(tx, ty, tz + 0.061), quat=letter_quat),
                 surface=letter_black,
             )
 
@@ -454,9 +475,8 @@ class RobotScene:
         for item, cfg in cutlery_configs.items():
             ox, oy, oz = cfg["offset"]
             item_pos = (ikea_table_pos[0] + ox, ikea_table_pos[1] + oy, ikea_table_pos[2] + oz)
-            item_mjcf = os.path.join(MJCF_DIR, item, f"{item}.xml")
             self.scene.add_entity(
-                gs.morphs.MJCF(file=item_mjcf, pos=item_pos),
+                self._prop_morph(item, item_pos),
                 surface=gs.surfaces.Default(color=cfg["color"]),
             )
 
@@ -906,11 +926,23 @@ def _parse_args(argv=None):
                    help="Genesis backend (default: auto-select).")
     p.add_argument("--n-envs", type=int, default=1,
                    help="Number of parallel environments (default: 1 = scalar mode).")
+    p.add_argument("--asset-format", choices=["mjcf", "usd"], default="mjcf",
+                   help="Source format for the table/letter/cutlery props (default: mjcf).")
     return p.parse_args(argv)
 
 
+# Map a --backend choice string to a Genesis backend object.
+_BACKEND_BY_NAME = {"cpu": gs.cpu, "cuda": gs.cuda, "amd": gs.amdgpu, "metal": gs.metal}
+
+
 def _resolve_backend(name):
-    return _backend_from_name(name)
+    """Resolve a --backend choice to a Genesis backend; 'auto'/None -> auto-select."""
+    if name in (None, "auto"):
+        return None
+    try:
+        return _BACKEND_BY_NAME[name]
+    except KeyError:
+        raise ValueError(f"unknown backend {name!r} (choose from {list(_BACKEND_BY_NAME)} or 'auto')")
 
 
 def main(argv=None):
@@ -921,6 +953,7 @@ def main(argv=None):
         video_path=args.video_path,
         backend=_resolve_backend(args.backend),
         n_envs=args.n_envs,
+        asset_format=args.asset_format,
     )
     print("=" * 80)
     print("✓ Scene built (11 tables + 9 letters + 3 cutlery + 1 mobile dual-arm robot)")

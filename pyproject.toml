@@ -7,7 +7,10 @@ readme = "README.md"
 requires-python = ">=3.10,<3.13"
 
 dependencies = [
-    "genesis-world==0.4.6",
+    "genesis-world[usd]==0.4.6",
+    # omniverse-kit ships cp310 wheels for linux/windows only (no macOS, no 3.11/3.12),
+    # so it's marker-gated; resolved from the NVIDIA index (see [tool.uv.sources]).
+    "omniverse-kit; python_full_version < '3.11' and sys_platform != 'darwin'",
     "pynput",
     "numpy",
     "ipywidgets",
@@ -78,6 +81,7 @@ torch = [
     { index = "pytorch-cu126", extra = "cu126" },
     { index = "pytorch-rocm", extra = "rocm", marker = "sys_platform == 'linux'" },
 ]
+omniverse-kit = [{ index = "nvidia" }]
 
 # explicit = true: these indexes are only used when explicitly referenced in
 # [tool.uv.sources], so they don't affect resolution of other packages.
@@ -94,4 +98,9 @@ explicit = true
 [[tool.uv.index]]
 name = "pytorch-rocm"
 url = "https://download.pytorch.org/whl/rocm7.2"
+explicit = true
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
 explicit = true
