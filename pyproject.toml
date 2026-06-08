@@ -7,7 +7,8 @@ readme = "README.md"
 requires-python = ">=3.10,<3.13"
 
 dependencies = [
-    "genesis-world[usd]==0.4.6",
+    "genesis-world==0.4.6",
+    "usd-core",
     # omniverse-kit ships cp310 wheels for linux/windows only (no macOS, no 3.11/3.12),
     # so it's marker-gated; resolved from the NVIDIA index (see [tool.uv.sources]).
     "omniverse-kit; python_full_version < '3.11' and sys_platform != 'darwin'",
