@@ -20,7 +20,7 @@ Recorded from the pick-and-place walkthrough in
 
 | Top-down camera | Robot head camera |
 | --- | --- |
-| <video src="https://github.com/yxzhan/fr3-genesis/raw/main/docs/robot_scene_tables_top.mp4" autoplay loop muted playsinline width="380"></video> | <video src="https://github.com/yxzhan/fr3-genesis/raw/main/docs/robot_scene_tables_head.mp4" autoplay loop muted playsinline width="380"></video> |
+| <video src="https://github.com/yxzhan/fr3-genesis/raw/main/docs/robot_scene_tables_top.mp4" controls autoplay loop muted playsinline width="500"></video> | <video src="https://github.com/yxzhan/fr3-genesis/raw/main/docs/robot_scene_tables_head.mp4" controls autoplay loop muted playsinline width="500"></video> |
 
 ## Quick Start
 
