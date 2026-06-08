@@ -13,6 +13,15 @@ Scripts under `scripts/`:
 - `scene_robot_keyboard.py` — full scene + keyboard teleop of the mobile base
   (arrow keys to translate, `,` / `.` to rotate); records a scripted video when headless.
 
+## Demo
+
+Recorded from the pick-and-place walkthrough in
+[`notebooks/robot_scene_tables.ipynb`](notebooks/robot_scene_tables.ipynb).
+
+| Top-down camera | Robot head camera |
+| --- | --- |
+| <video src="https://github.com/yxzhan/fr3-genesis/raw/main/docs/robot_scene_tables_top.mp4" autoplay loop muted playsinline width="380"></video> | <video src="https://github.com/yxzhan/fr3-genesis/raw/main/docs/robot_scene_tables_head.mp4" autoplay loop muted playsinline width="380"></video> |
+
 ## Quick Start
 
 Run the demo notebook on a

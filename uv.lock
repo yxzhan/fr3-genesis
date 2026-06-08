@@ -574,7 +574,6 @@ dependencies = [
     { name = "ipywidgets" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-11-fr3-genesis-cpu' and extra == 'extra-11-fr3-genesis-cu126') or (extra == 'extra-11-fr3-genesis-cpu' and extra == 'extra-11-fr3-genesis-rocm') or (extra == 'extra-11-fr3-genesis-cu126' and extra == 'extra-11-fr3-genesis-rocm')" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-11-fr3-genesis-cpu' and extra == 'extra-11-fr3-genesis-cu126') or (extra == 'extra-11-fr3-genesis-cpu' and extra == 'extra-11-fr3-genesis-rocm') or (extra == 'extra-11-fr3-genesis-cu126' and extra == 'extra-11-fr3-genesis-rocm')" },
-    { name = "omniverse-kit", marker = "(python_full_version < '3.11' and sys_platform != 'darwin') or (python_full_version >= '3.11' and extra == 'extra-11-fr3-genesis-cpu' and extra == 'extra-11-fr3-genesis-cu126') or (python_full_version >= '3.11' and extra == 'extra-11-fr3-genesis-cpu' and extra == 'extra-11-fr3-genesis-rocm') or (python_full_version >= '3.11' and extra == 'extra-11-fr3-genesis-cu126' and extra == 'extra-11-fr3-genesis-rocm') or (sys_platform == 'darwin' and extra == 'extra-11-fr3-genesis-cpu' and extra == 'extra-11-fr3-genesis-cu126') or (sys_platform == 'darwin' and extra == 'extra-11-fr3-genesis-cpu' and extra == 'extra-11-fr3-genesis-rocm') or (sys_platform == 'darwin' and extra == 'extra-11-fr3-genesis-cu126' and extra == 'extra-11-fr3-genesis-rocm')" },
     { name = "pynput" },
     { name = "sidecar" },
     { name = "tqdm" },
@@ -605,7 +604,6 @@ requires-dist = [
     { name = "genesis-world", specifier = "==0.4.6" },
     { name = "ipywidgets" },
     { name = "numpy" },
-    { name = "omniverse-kit", marker = "python_full_version < '3.11' and sys_platform != 'darwin'", index = "https://pypi.nvidia.com/" },
     { name = "pynput" },
     { name = "sidecar" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'rocm'", index = "https://download.pytorch.org/whl/rocm7.2", conflict = { package = "fr3-genesis", extra = "rocm" } },
@@ -1666,15 +1664,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/56/9a/fff8376f8e3d084cd1530e1ef7b879bb7d6d265620c95c1b322725c694f4/nvidia_nvtx_cu12-12.6.77-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:b90bed3df379fa79afbd21be8e04a0314336b8ae16768b58f2d34cb1d04cd7d2", size = 89276, upload-time = "2024-11-20T17:38:27.621Z" },
     { url = "https://files.pythonhosted.org/packages/9e/4e/0d0c945463719429b7bd21dece907ad0bde437a2ff12b9b12fee94722ab0/nvidia_nvtx_cu12-12.6.77-py3-none-manylinux2014_x86_64.whl", hash = "sha256:6574241a3ec5fdc9334353ab8c479fe75841dbe8f4532a8fc97ce63503330ba1", size = 89265, upload-time = "2024-10-01T17:00:38.172Z" },
     { url = "https://files.pythonhosted.org/packages/f7/cd/98a447919d4ed14d407ac82b14b0a0c9c1dbfe81099934b1fc3bfd1e6316/nvidia_nvtx_cu12-12.6.77-py3-none-win_amd64.whl", hash = "sha256:2fb11a4af04a5e6c84073e6404d26588a34afd35379f0855a99797897efa75c0", size = 56434, upload-time = "2024-10-01T17:11:13.124Z" },
-]
-
-[[package]]
-name = "omniverse-kit"
-version = "106.5.0.162521"
-source = { registry = "https://pypi.nvidia.com/" }
-wheels = [
-    { url = "https://pypi.nvidia.com/omniverse-kit/omniverse_kit-106.5.0.162521-cp310-none-manylinux_2_34_x86_64.whl", hash = "sha256:c320dfb1dba2c660102e95fb48af9c3617933e5916d184d84f71917ca6bad7f1" },
-    { url = "https://pypi.nvidia.com/omniverse-kit/omniverse_kit-106.5.0.162521-cp310-none-win_amd64.whl", hash = "sha256:167db2d4a802ae7d00725364da695d41fef729ab09bfc2f0fd1cb30bde3e2c57" },
 ]
 
 [[package]]
