@@ -37,6 +37,7 @@ import shutil
 import warnings
 from datetime import datetime
 
+from tqdm import tqdm
 import numpy as np
 import genesis as gs
 
@@ -663,9 +664,14 @@ class RobotScene:
         self.robot.control_dofs_position(self._emit(steer_targets), self.steering_dofs)
         self.robot.control_dofs_velocity(self._emit(drive_targets), self.drive_dofs)
 
-    def step(self, n=1):
-        """Advance the simulation by ``n`` steps, holding all current targets."""
-        for _ in range(n):
+    def step(self, n=1, desc=None):
+        """Advance the simulation by ``n`` steps, holding all current targets.
+
+        Pass ``desc`` to show a tqdm progress bar with that label; when ``desc`` is
+        None (default) the loop runs plain, with no progress bar.
+        """
+        iterator = range(n) if desc is None else tqdm(range(n), desc=desc)
+        for _ in iterator:
             self._apply_base_control()
             self._apply_joint_targets()
             self.scene.step()
